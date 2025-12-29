@@ -403,6 +403,29 @@ Byte 8 distinguishes between melody voices:
 For melody-only MIDI export, filter by `byte[8] == 0` AND marker in `(I, F, L, @)`.
 This produces clean melodic sequences that match the original TablEdit MIDI export.
 
+**Section Storage vs MIDI Playback:**
+
+TEF files store musical **source material** (sections, variations), while MIDI exports
+are **rendered arrangements** with repeats unfolded.
+
+| Aspect | TEF Storage | MIDI Export |
+|--------|-------------|-------------|
+| angeline_the_baker | ~46 beats | ~127 beats |
+| Ratio | 1x | 2.75x (repeats) |
+| Structure | A-part + B-part stored once | AA+BB+AA... arrangement |
+
+**Section Matching Analysis (angeline_the_baker):**
+| Section | TEF Beats | Match Rate | Notes |
+|---------|-----------|------------|-------|
+| 0 | 0-8 | 100% | Perfect match |
+| 1 | 8-16 | 80% | Minor differences |
+| 2 | 16-24 | 100% | Perfect match |
+| 3 | 24-32 | 100% | Perfect match |
+| 4-5 | 32-48 | 10-18% | "High break" variant, not used in MIDI |
+
+**Implication**: TEF parser extracts correct source material. Differences from MIDI
+are due to arrangement choices (which sections/repeats TablEdit included in export).
+
 **Decoding formula:**
 ```python
 # Find notes using debt header
@@ -420,13 +443,19 @@ tuning = [62, 59, 55, 50, 67]   # Open G: D4, B3, G3, D3, g4
 pitch = tuning[string - 1] + fret
 ```
 
-**Test results (100% decode for verified files):**
-| File | Notes | Match |
-|------|-------|-------|
-| Multi Note.tef | 36 | 36/36 (100%) |
-| Multi Note 2.tef | 62 | First 36 match perfectly |
-| shuck_the_corn.tef | 49 melody | Correct pitches |
-| angeline_the_baker | 15 | Parses correctly |
+**Test results (with strict filter):**
+| File | TEF Notes | MIDI Notes | Match Rate | Notes |
+|------|-----------|------------|------------|-------|
+| Multi Note.tef | 36 | 36 | 100% pitch | All pitches match |
+| angeline_the_baker | 67 | 188 | 46/67 exact | TEF stores source, MIDI has repeats |
+| shuck_the_corn.tef | ~50 | varies | High | Correct pitches for first section |
+
+**Timing Scale:**
+```python
+# TEF uses 1408 ticks per beat, MIDI uses 240
+SCALE = 240 / 1408  # = 0.1705
+midi_tick = int(tef_position * SCALE)
+```
 
 **Why previous analysis was confused:**
 - The "simple" and "large" formats were the SAME format at different offsets
