@@ -308,19 +308,22 @@ class TEFReader:
         """
         instruments = []
 
-        # Instrument names with expected string counts
+        # Instrument names with expected string counts (case-insensitive search)
         instrument_info = [
-            (b"Banjo open G", 5),
-            (b"guitar", 6),
-            (b"bass", 4),
+            ("banjo open g", 5),
+            ("guitar", 6),
+            ("bass", 4),
         ]
 
-        for name_bytes, expected_strings in instrument_info:
-            idx = self.data.find(name_bytes)
+        for name_pattern, expected_strings in instrument_info:
+            # Case-insensitive search
+            data_lower = self.data.lower()
+            idx = data_lower.find(name_pattern.encode('ascii'))
             if idx < 0:
                 continue
 
-            name = name_bytes.decode('ascii')
+            # Get actual name from original data
+            name = self.data[idx:idx + len(name_pattern)].decode('ascii', errors='ignore')
 
             # The bytes before the name are: [tuning * n][velocity * n] or just [tuning * n][nulls]
             # We need to skip velocity/padding and find tuning
@@ -351,19 +354,23 @@ class TEFReader:
             while pos > 0 and (self.data[pos] == 0 or pos > 0 and self.data[pos - 1] == 0):
                 pos -= 1
 
-            # Now extract tuning bytes - they should be in the valid MIDI range
+            # Now extract tuning bytes and convert to MIDI pitches
+            # Formula: MIDI_pitch = 96 - tuning_byte (verified with Open G banjo)
             tuning_end = pos + 1
             tuning_start = tuning_end - expected_strings
             if tuning_start >= 0:
                 tuning_bytes = list(self.data[tuning_start:tuning_end])
+                # Convert raw bytes to MIDI pitches: pitch = 96 - byte
+                tuning_pitches = [96 - b for b in tuning_bytes]
             else:
                 tuning_bytes = []
+                tuning_pitches = []
 
             instruments.append(TEFInstrument(
                 name=name,
                 tuning_name="",
                 num_strings=expected_strings,
-                tuning_pitches=tuning_bytes,
+                tuning_pitches=tuning_pitches,
                 offset=idx,
             ))
 

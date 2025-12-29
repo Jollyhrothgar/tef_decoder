@@ -51,6 +51,14 @@ def tef_to_midi(tef, output_path: Path, melody_only: bool = True):
         print("No note events found!")
         return
 
+    # Get tuning from file (default to Open G if not found)
+    tuning = [62, 59, 55, 50, 67]  # Default Open G banjo
+    for inst in tef.instruments:
+        if 'banjo' in inst.name.lower():
+            if len(inst.tuning_pitches) == 5:
+                tuning = inst.tuning_pitches
+                break
+
     # Convert TEF position to MIDI ticks
     # Scale factor depends on position values - different files use different internal scales.
     # Only consider main melody markers (F, I, L) for scale detection, not chord markers (C, @).
@@ -85,8 +93,8 @@ def tef_to_midi(tef, output_path: Path, melody_only: bool = True):
     for i, evt in enumerate(note_events):
         tick = int(evt.position * SCALE)
 
-        # Use decoded pitch for melody, fallback for others
-        pitch = evt.get_pitch()
+        # Use decoded pitch with file's tuning
+        pitch = evt.get_pitch(tuning)
         if pitch is None:
             continue
 
