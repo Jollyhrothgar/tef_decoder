@@ -389,8 +389,19 @@ string = string_val // 8 + 1   # Maps 0,8,16,24,32 → strings 1-5
 | F | 0x46 | Fret - additional picked notes |
 | L | 0x4c | Legato - slurs, hammer-ons, pull-offs |
 | C | 0x43 | Chord/Continue marker |
-| @ | 0x40 | Special marker |
+| @ | 0x40 | Special marker (often bass/thumb notes) |
 | S | 0x00 | Section/special boundary |
+
+**Voice Filtering (byte 8):**
+
+Byte 8 distinguishes between melody voices:
+| byte[8] | Meaning | Use |
+|---------|---------|-----|
+| 0 | Primary melody | Include in melody export |
+| 1 | Secondary pattern | Secondary voice/accompaniment |
+
+For melody-only MIDI export, filter by `byte[8] == 0` AND marker in `(I, F, L, @)`.
+This produces clean melodic sequences that match the original TablEdit MIDI export.
 
 **Decoding formula:**
 ```python
@@ -562,6 +573,22 @@ Banjo open G: tuning bytes [22 25 29 2e 1d] = gDGBD
 guitar:       tuning bytes [20 25 29 2e 33 38] = EADGBE
 bass:         tuning bytes [35 3a 3f 44] = EADG
 ```
+
+**Tuning Formula (Discovered Dec 2025):**
+```python
+MIDI_pitch = 96 - tuning_byte
+```
+
+Verified with Open G banjo tuning:
+| Tuning byte | Calculation | MIDI | Note |
+|-------------|-------------|------|------|
+| 34 (0x22) | 96 - 34 = 62 | 62 | D4 (string 1) |
+| 37 (0x25) | 96 - 37 = 59 | 59 | B3 (string 2) |
+| 41 (0x29) | 96 - 41 = 55 | 55 | G3 (string 3) |
+| 46 (0x2e) | 96 - 46 = 50 | 50 | D3 (string 4) |
+| 29 (0x1d) | 96 - 29 = 67 | 67 | G4 (string 5) |
+
+Spiked 5th string (tuned up to A): byte 27 (0x1b) → 96 - 27 = 69 (A4)
 
 ### Tempo/Time Signature (offset ~0x3C0)
 Time signature 4/4 visible, tempo 160 BPM (matches ABC export)

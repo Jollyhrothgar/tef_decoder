@@ -36,9 +36,15 @@ def tef_to_midi(tef, output_path: Path, melody_only: bool = True):
 
     # Get note events, sorted by position
     if melody_only:
-        # Only melody notes that we can decode
+        # Only melody notes (I, F, L, @ markers) that we can decode
+        # Filter by byte 8 == 0 (primary melody voice, not secondary patterns)
+        # C markers are chord accompaniment, exclude them
         note_events = sorted(
-            [e for e in tef.note_events if e.is_melody and e.decode_string_fret()],
+            [e for e in tef.note_events
+             if e.marker in ('I', 'F', 'L', '@')
+             and e.is_melody
+             and e.decode_string_fret()
+             and len(e.raw_data) >= 9 and e.raw_data[8] == 0],
             key=lambda e: e.position
         )
     else:
