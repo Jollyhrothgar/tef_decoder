@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# bootstrap - First-time setup
+#
+# Usage:
+#   ./scripts/bootstrap           # Full setup: install deps
+#   ./scripts/bootstrap --quick   # Skip dependency install
+#
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+QUICK=false
+for arg in "$@"; do
+    case $arg in
+        --quick)
+            QUICK=true
+            shift
+            ;;
+    esac
+done
+
+echo "=== TEF Parser Bootstrap ==="
+echo ""
+
+# Install dependencies (unless --quick)
+if [ "$QUICK" = false ]; then
+    echo "Installing dependencies..."
+    uv sync
+    echo ""
+fi
+
+# Move sample files to proper location
+if [ -f "shuck_the_corn.tef" ] && [ ! -f "samples/v3.05/shuck_the_corn.tef" ]; then
+    echo "Organizing sample files..."
+    cp shuck_the_corn.* samples/v3.05/
+fi
+
+echo "Bootstrap complete!"
+echo "  - Run 'uv run pytest' to run tests"
+echo "  - Run './scripts/utility parse <file.tef>' to parse a file"

@@ -1,0 +1,13 @@
+[project]
+name = "tef-parser"
+version = "0.1.0"
+description = "Reverse-engineered parser for TablEdit .tef files"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mido>=1.3.3",
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

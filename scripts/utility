@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# utility - User-facing utility commands
+#
+# Usage:
+#   ./scripts/utility parse <file.tef>              # Parse and dump structure
+#   ./scripts/utility export <file.tef> --format abc    # Export to format
+#   ./scripts/utility validate <file.tef>           # Compare against known export
+#
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+COMMAND="${1:-}"
+shift 2>/dev/null || true
+
+show_help() {
+    echo "Usage: ./scripts/utility <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  parse <file.tef>"
+    echo "      Parse TEF file and dump structure"
+    echo ""
+    echo "  export <file.tef> [--pretty]"
+    echo "      Export TEF to JSON format"
+    echo ""
+    echo "  midi <file.tef> [output.mid]"
+    echo "      Export parsed notes to MIDI (for audio verification)"
+    echo ""
+    echo "  view <file.tef>"
+    echo "      View parsed tablature as ASCII timeline"
+    echo ""
+    echo "  version <file.tef>"
+    echo "      Show TEF file version"
+    echo ""
+}
+
+case "$COMMAND" in
+    parse)
+        uv run python3 scripts/lib/parse_tef.py "$@"
+        ;;
+    export)
+        uv run python3 scripts/lib/export_json.py "$@"
+        ;;
+    midi)
+        uv run python3 scripts/lib/export_midi.py "$@"
+        ;;
+    view)
+        uv run python3 scripts/lib/view_tab.py "$@"
+        ;;
+    version)
+        uv run python3 -c "
+import sys
+with open('$1', 'rb') as f:
+    h = f.read(4)
+print(f'TEF version: {h[3]}.{h[2]:02d}')
+"
+        ;;
+    help|--help|-h|"")
+        show_help
+        ;;
+    *)
+        echo "Unknown command: $COMMAND"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
