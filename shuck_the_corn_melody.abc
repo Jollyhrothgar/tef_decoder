@@ -1,0 +1,14 @@
+X:1
+T:Shuckin' The Corn
+M:4/4
+L:1/8
+Q:1/4=160
+K:G
+%%MIDI program 105
+
+G, D, E, D C D, G, C | B, G, C D, D, C B, G, | C D, G, C B, D C D | C A, G D _E D _E _D | 
+ G B, _E E D _E B, B, | C A C G, G, C A D | C G, B, _E G G _E E | B, _E _D G G _E B, C | 
+ A C G, B, C D, C B, | D C A C A [G,B,] [B,C] [_DG] | [B,C] [_DG] C E D [B,C] [B,C] [_DG] | [B,C] [_DG] C E D B, G G | 
+ _E E B, _E _D G G _E | E D B, G G C G, C | A D C G, B, _E _D G | G _E E B, _E _D G G | 
+ _E B, C A C G, G, C | A C A
+|]

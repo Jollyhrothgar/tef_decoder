@@ -407,8 +407,8 @@ class TEFReader:
     def find_debt_offset(self) -> int:
         """Find the note region start using the 'debt' header marker.
 
-        The 'debt' marker is followed by a 4-byte offset value that points
-        to 6 bytes AFTER the first note record. So notes start at (debt_value - 6).
+        The 'debt' marker is followed by a 4-byte offset value. Notes typically
+        start at (debt_value - 6), but some files have notes at (debt_value + 6).
 
         Returns the note region start offset, or -1 if not found.
         """
@@ -419,14 +419,18 @@ class TEFReader:
         # Read the 4-byte value after 'debt'
         debt_val = struct.unpack('<I', self.data[debt_pos + 4:debt_pos + 8])[0]
 
-        # Notes start 6 bytes before the debt value
-        note_start = debt_val - 6
+        # Valid markers: I, F, L, C (C is used for chords/continue in some files)
+        valid_markers = (0x49, 0x46, 0x4c, 0x43)
 
-        # Validate: check if we find valid markers at byte 11
-        if note_start + 12 <= len(self.data):
-            rec = self.data[note_start:note_start + 12]
-            if rec[11] in (0x49, 0x46, 0x4c):  # I, F, L markers
-                return note_start
+        # Try different offsets from debt_val
+        for offset in [-6, 0, 6, 12]:
+            note_start = debt_val + offset
+            if note_start + 24 <= len(self.data) and note_start >= 0:
+                rec1 = self.data[note_start:note_start + 12]
+                rec2 = self.data[note_start + 12:note_start + 24]
+                # Check if either record has a valid marker at byte 11
+                if rec1[11] in valid_markers or rec2[11] in valid_markers:
+                    return note_start
 
         return -1
 
@@ -499,6 +503,10 @@ class TEFReader:
                 marker = 'F'
             elif marker_byte == 0x4c:  # 'L'
                 marker = 'L'
+            elif marker_byte == 0x43:  # 'C' - chord/continue marker
+                marker = 'C'
+            elif marker_byte == 0x40:  # '@' - special marker in some files
+                marker = '@'
             elif marker_byte == 0x00:
                 marker = 'S'  # Special/section marker
             else:

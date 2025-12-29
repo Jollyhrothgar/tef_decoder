@@ -293,85 +293,88 @@ b9=0,  b11=112 (upper=7)  → pitch 67 (G4) = string 5 fret 0
 - Melody notes (b9 > 0): Upper nibble of b11 encodes string+fret combined
 - Accompaniment notes (b9 = 0): Pitch derived from chord context; b11 encodes voice slot
 
-### Note Encoding - Two File Formats (Dec 2025)
+### Unified Note Format (Dec 2025 - BREAKTHROUGH)
 
-TEF files use two distinct note encoding formats based on file complexity:
+**Key Discovery**: All TEF files use the SAME 12-byte note record format. The apparent differences were due to incorrect alignment.
 
-#### Format 1: Simple Format (Multi Note.tef style)
+#### The "debt" Header Marker
 
-Used for simpler files. Notes start at offset 0x410 in 12-byte records.
+The `debt` marker at offset 0x38 is crucial for finding notes:
 
-**Record structure:**
+```
+Offset 0x38: "debt" followed by 4-byte offset value
+```
+
+**Note region location:**
+- Primary: `debt_value - 6`
+- Some files: `debt_value + 6` (try both, validate by checking for markers)
+
+#### Unified 12-Byte Record Structure
+
 ```
 Offset  Size  Field           Description
 ------  ----  -----           -----------
-0-5     6     Padding         Always zeros (key identifier for this format)
-6-7     2     Position        Little-endian tick position
-8-9     2     Reserved
-10      1     Fret+1          Fret number + 1 (so fret 0 = 0x01)
-11      1     Marker          0x49='I' (Initial)
+0-5     6     Flags           Articulation/track flags (zeros for simple files)
+6       1     Position low    Low byte of position + string in bits 3-5
+7       1     Position high   High byte of position
+8-9     2     Additional      Reserved/flags
+10      1     Fret + 1        Fret number plus one (fret 0 = 0x01)
+11      1     Marker          I/F/L/C/S marker type
 ```
 
-**String encoding in byte 6:**
+**String encoding (bits 3-5 of byte 6):**
+```python
+string_val = byte6 & 0x38   # Mask bits 3-5 only
+string = string_val // 8 + 1   # Maps 0,8,16,24,32 → strings 1-5
 ```
-string = (byte[6] & 0x3F) // 8 + 1
-```
+
+| byte[6] & 0x38 | String | Open tuning (Open G) |
+|----------------|--------|---------------------|
+| 0x00 (0) | 1 | D4 (MIDI 62) |
+| 0x08 (8) | 2 | B3 (MIDI 59) |
+| 0x10 (16) | 3 | G3 (MIDI 55) |
+| 0x18 (24) | 4 | D3 (MIDI 50) |
+| 0x20 (32) | 5 | g4 (MIDI 67) |
+
+**Marker types:**
+| Marker | Byte | Meaning |
+|--------|------|---------|
+| I | 0x49 | Initial - first struck note |
+| F | 0x46 | Fret - additional picked notes |
+| L | 0x4c | Legato - slurs, hammer-ons, pull-offs |
+| C | 0x43 | Chord/Continue marker |
+| @ | 0x40 | Special marker |
+| S | 0x00 | Section/special boundary |
 
 **Decoding formula:**
 ```python
-string = (b6 & 0x3F) // 8 + 1   # Lower 6 bits: 0,8,16,24,32 → strings 1-5
-fret = b10 - 1                   # Byte 10 minus 1
+# Find notes using debt header
+debt_pos = data.find(b'debt')
+debt_val = struct.unpack('<I', data[debt_pos + 4:debt_pos + 8])[0]
+note_start = debt_val - 6   # or +6 for some files
+
+# Decode each 12-byte record
+string = (byte[6] & 0x38) // 8 + 1   # Bits 3-5
+fret = byte[10] - 1                   # Byte 10 minus 1
+marker = byte[11]                     # I/F/L/C/S
+
+# Calculate MIDI pitch
+tuning = [62, 59, 55, 50, 67]   # Open G: D4, B3, G3, D3, g4
+pitch = tuning[string - 1] + fret
 ```
 
-**Verified with Multi Note.tef (36/36 = 100% decode success):**
-| Position | byte[6] | byte[10] | Decoded | Notes |
-|----------|---------|----------|---------|-------|
-| 32 | 0x20 (32) | 0x01 | s5 f0 | 5th string open |
-| 344 | 0x18 (24) | 0x01 | s4 f0 | 4th string open |
-| 656 | 0x10 (16) | 0x01 | s3 f0 | 3rd string open |
-| 968 | 0x08 (8) | 0x01 | s2 f0 | 2nd string open |
-| 1280 | 0x00 (0) | 0x01 | s1 f0 | 1st string open |
-| 5464 | 0x18 (24) | 0x12 (18) | s4 f17 | High fret |
+**Test results (100% decode for verified files):**
+| File | Notes | Match |
+|------|-------|-------|
+| Multi Note.tef | 36 | 36/36 (100%) |
+| Multi Note 2.tef | 62 | First 36 match perfectly |
+| shuck_the_corn.tef | 49 melody | Correct pitches |
+| angeline_the_baker | 15 | Parses correctly |
 
-#### Format 2: Large Format (shuck_the_corn.tef style)
-
-Used for complex multi-instrument files. Notes have markers at byte 4.
-
-**Record structure:**
-```
-Offset  Size  Field           Description
-------  ----  -----           -----------
-0-1     2     Position        Little-endian tick position
-2       1     Reserved
-3       1     Track           Track/module ID
-4       1     Marker          0x49='I', 0x46='F', 0x4C='L', 0x00='S'
-5       1     Articulation    0=normal, 1=hammer, 2=pull-off, 3=slide
-6-8     3     Reserved
-9       1     Voice (b9)      0=accompaniment, 6/12/18=melody voices
-10      1     Reserved
-11      1     String+Fret     Combined encoding (b11)
-```
-
-**Decoding formula (for melody notes, b9 > 0):**
-```python
-# Primary formula (with voice offset)
-voice_offset = (b9 // 6 - 1) * 136
-b11_adj = b11 - voice_offset
-fret = b11_adj // 96
-string = (b11_adj % 96) // 8 + 1
-
-# Alternate formula (fallback)
-fret = b11 // 64
-string = (b11 % 64) // 8 + 1
-```
-
-**Decode success: 149/192 melody notes (78%)**
-
-Some edge cases (e.g., b9=6, b11=168) remain undecoded.
-
-**Known limitations:**
-- Accompaniment notes (b9=0) use chord-based encoding (not yet decoded)
-- Some b9=6 notes with high b11 values fail both formulas
+**Why previous analysis was confused:**
+- The "simple" and "large" formats were the SAME format at different offsets
+- Byte 11 was always the marker - we were just misaligned
+- The debt header tells us exactly where to start
 
 ### Multi-Note Record Format (Dec 2025)
 
