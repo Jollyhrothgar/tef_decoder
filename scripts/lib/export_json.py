@@ -37,7 +37,7 @@ def tef_to_dict(tef) -> dict:
                     "articulation": e.articulation,
                     "pitch_byte": e.pitch_byte,
                     "b11": e.b11,
-                    "estimated_pitch": e.estimated_midi_pitch,
+                    "estimated_pitch": e.get_pitch(),
                 }
                 for e in tef.note_events
             ],

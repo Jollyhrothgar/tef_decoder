@@ -120,6 +120,52 @@ uv run python3 scripts/lib/<implementation>.py "$@"
 | `temac_sections/` | PDF split into 76 section chunks (use pdf_splitter) |
 | `tev305.dmg` | TablEdit v3.05 installer (for testing) |
 
+## Test Files
+
+Test files created or collected for validating the parser:
+
+### Single Note Files
+| File | Purpose |
+|------|---------|
+| `single_open_string_1_d4.tef` | Validate string 1 open = D4 (MIDI 62) |
+| `single_open_string_2_b3.tef` | Validate string 2 open = B3 (MIDI 59) |
+| `single_open_string_3_g3.tef` | Validate string 3 open = G3 (MIDI 55) |
+| `single_open_string_4_d3.tef` | Validate string 4 open = D3 (MIDI 50) |
+| `single_open_string_5_tg4.tef` | Validate string 5 open = g4 (MIDI 67) |
+| `string_1_fret_2_e4.tef` | Validate fret encoding: s1 f2 = E4 (MIDI 64) |
+| `string_1_fret_3_f4.tef` | Validate fret encoding: s1 f3 = F4 (MIDI 65) |
+
+### Multi-Note Files
+| File | Purpose |
+|------|---------|
+| `two_simultaneus_notes_string_1_and_5_eigth_notes.tef` | Simultaneous notes on strings 1 and 5 |
+| `sequential_3rd_string_quarter_beat_1_eigth_beat_2.tef` | Sequential notes with timing offsets |
+| `hammar_on_2nd_string_eight_notes_beat_1_open_beat_and-of-1_fret_2.tef` | Hammer-on articulation test |
+| `Multi Note.tef` | 36 notes - simple multi-note sequence |
+| `Multi Note 2.tef` | 62 notes - extended multi-note sequence |
+| `Multi Note - Two Track Offset.tef` | Two-track file with offset timing |
+
+### Complex Songs
+| File | Purpose |
+|------|---------|
+| `shuck_the_corn.tef` | Primary test - full banjo arrangement (8691 bytes, 570 events) |
+| `shuck_the_corn_banjo_only.tef` | Banjo-only version for module/track isolation |
+| `angeline_the_baker_banjo_guitar_banjo_fifth_string_tuned_1_step_higher.tef` | Multi-track banjo+guitar, spiked 5th string (G→A) |
+
+### Expected MIDI Outputs
+| File | Purpose |
+|------|---------|
+| `shuck_the_corn.mid` | TablEdit's official MIDI export (full arrangement) |
+| `shuck_the_corn_melody.mid` | Melody track only |
+| `Multi Note.mid` | Reference MIDI for Multi Note.tef |
+| `angeline_the_baker...mid` | Reference MIDI for angeline (188 banjo + guitar notes) |
+
+### Generated Files
+| Suffix | Purpose |
+|--------|---------|
+| `.parsed.mid` | Parser-generated MIDI for comparison |
+| `.json` | JSON export of parsed note events |
+
 ### Documentation Notes
 
 The PDF is a **user manual** (UI-focused), not a file format specification. Reverse engineering required.

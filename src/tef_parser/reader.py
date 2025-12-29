@@ -488,6 +488,8 @@ class TEFReader:
 
         offset = start_offset
         prev_pos = -1
+        consecutive_invalid = 0
+        max_invalid = 10  # Stop after 10 consecutive invalid markers
 
         while offset + 12 <= len(self.data):
             record = self.data[offset:offset + 12]
@@ -507,16 +509,29 @@ class TEFReader:
             elif marker_byte == 0x40:  # '@' - special marker in some files
                 marker = '@'
             elif marker_byte == 0x00:
-                marker = 'S'  # Special/section marker
+                marker = 'S'  # Special/section marker (skip but continue)
+                offset += 12
+                consecutive_invalid += 1
+                if consecutive_invalid >= max_invalid:
+                    break
+                continue
             else:
-                # Invalid marker - end of note region
-                break
+                # Unknown marker - skip and continue looking
+                offset += 12
+                consecutive_invalid += 1
+                if consecutive_invalid >= max_invalid:
+                    break
+                continue
+
+            # Reset invalid counter on valid marker
+            consecutive_invalid = 0
 
             # Position from bytes 6-7 only (bytes 0-5 contain flags/articulation, not position)
             pos_low = struct.unpack("<H", record[6:8])[0]
 
-            # Clear the string encoding bits from position (bits 0-5 of low byte)
-            pos = pos_low & 0xFFC0
+            # Clear the string encoding bits from position (bits 3-5 of low byte)
+            # Keep bits 0-2 and 6+ for position calculation
+            pos = (record[6] & 0xC7) | (record[7] << 8)
 
             # Track/voice info from bytes 4-5
             track = record[4] if record[4] != 0 else 1
@@ -527,10 +542,6 @@ class TEFReader:
 
             # Stop if we see end marker pattern
             if record[6:8] == b'\xff\xff' or record[10:12] == b'\xff\xff':
-                break
-
-            # Stop if position jumps way back (likely end of region)
-            if prev_pos >= 0 and pos < prev_pos - 1000 and pos == 0:
                 break
 
             events.append(TEFNoteEvent(

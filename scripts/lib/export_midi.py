@@ -52,16 +52,25 @@ def tef_to_midi(tef, output_path: Path, melody_only: bool = True):
         return
 
     # Convert TEF position to MIDI ticks
-    # Scale factor depends on position values:
-    # - If positions are small (0-1000 range), scale up by ~0.375
-    # - If positions are large (1000+ range), scale down by 0.125
+    # Scale factor depends on position values - different files use different internal scales.
+    # Only consider main melody markers (F, I, L) for scale detection, not chord markers (C, @).
 
-    # Calculate scale based on position range
-    max_pos = max(e.position for e in note_events) if note_events else 0
-    min_nonzero = min((e.position for e in note_events if e.position > 0), default=320)
+    # Get positions from main melody notes only (F, I, L markers)
+    melody_positions = [e.position for e in note_events if e.marker in ('F', 'I', 'L') and e.position > 0]
 
-    if min_nonzero >= 900:
-        # Large position values (like shuck_the_corn: 960, 1920, 3840...)
+    if melody_positions:
+        min_nonzero = min(melody_positions)
+    else:
+        # Fallback: use all non-zero positions
+        min_nonzero = min((e.position for e in note_events if e.position > 0), default=320)
+
+    if min_nonzero >= 1200:
+        # High-resolution position values (like angeline: 1408, 2816, 4224...)
+        # These have ratio ~5.867 between TEF and MIDI at 192 ticks/beat
+        # For 240 ticks/beat export: scale = 240 / (192 * 5.867) = 0.213
+        SCALE = 0.213
+    elif min_nonzero >= 900:
+        # Medium position values (like shuck_the_corn: 960, 1920, 3840...)
         # Scale down: TEF 960 -> MIDI 120 (eighth note)
         SCALE = 0.125
     else:
