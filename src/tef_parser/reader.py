@@ -102,7 +102,7 @@ class TEFNoteEvent:
         """True if this is a melody note (can decode string/fret)."""
         # Unified format: check if byte 10 (fret + 1) is valid
         if len(self.raw_data) >= 12 and self.raw_data[10] > 0:
-            # Also verify string encoding is valid (bits 3-5 of byte 6)
+            # Verify string encoding is valid (bits 3-5 of byte 6)
             b6 = self.raw_data[6]
             string_val = b6 & 0x38  # Bits 3-5 only
             if string_val in (0, 8, 16, 24, 32):
@@ -116,7 +116,7 @@ class TEFNoteEvent:
         Returns None if decoding fails.
 
         Unified format (all TEF files):
-        - Byte 6: Position low byte with string encoded in bits 0-5
+        - Byte 6: Position low byte with string encoded in bits 3-5
           (values 0, 8, 16, 24, 32 map to strings 1-5)
           Bits 6-7 are position high bits, not string data
         - Byte 10: Fret + 1
@@ -125,10 +125,9 @@ class TEFNoteEvent:
         if len(self.raw_data) < 12:
             return None
 
-        # String from byte 6, bits 0-5 (values 0, 8, 16, 24, 32)
-        # Bits 6-7 are position extension, mask them off
+        # String from byte 6, bits 3-5 only (0x38 mask)
         b6 = self.raw_data[6]
-        string_val = b6 & 0x38  # Bits 3-5 only (0x38 = 0b00111000)
+        string_val = b6 & 0x38  # Bits 3-5 only
 
         # Valid string encodings: 0, 8, 16, 24, 32 -> strings 1-5
         if string_val not in (0, 8, 16, 24, 32):
