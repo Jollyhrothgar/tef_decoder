@@ -27,7 +27,10 @@ show_help() {
     echo "      Export TEF to JSON format"
     echo ""
     echo "  midi <file.tef> [output.mid]"
-    echo "      Export parsed notes to MIDI (for audio verification)"
+    echo "      Export melody to MIDI"
+    echo ""
+    echo "  abc <file.tef> [output.abc]"
+    echo "      Export melody to ABC notation"
     echo ""
     echo "  view <file.tef>"
     echo "      View parsed tablature as ASCII timeline"
@@ -46,6 +49,9 @@ case "$COMMAND" in
         ;;
     midi)
         uv run python3 scripts/lib/export_midi.py "$@"
+        ;;
+    abc)
+        uv run python3 scripts/lib/export_abc.py "$@"
         ;;
     view)
         uv run python3 scripts/lib/view_tab.py "$@"

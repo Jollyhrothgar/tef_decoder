@@ -78,52 +78,69 @@ class TEFNoteEvent:
         return {0: 'normal', 1: 'hammer-on', 2: 'pull-off', 3: 'slide'}.get(self.extra, 'unknown')
 
     @property
+    def b6(self) -> int:
+        """Byte 6 - contains string encoding in lower bits."""
+        return self.raw_data[6] if len(self.raw_data) > 6 else 0
+
+    @property
     def b9(self) -> int:
         """Byte 9 - module/voice indicator (0=accompaniment, 6/12/18=melody)."""
         return self.pitch_byte
 
     @property
+    def b10(self) -> int:
+        """Byte 10 - fret encoding (fret + 1)."""
+        return self.raw_data[10] if len(self.raw_data) > 10 else 0
+
+    @property
     def b11(self) -> int:
-        """Byte 11 value - combined string+fret encoding."""
+        """Byte 11 value - used in large file format."""
         return self.raw_data[11] if len(self.raw_data) > 11 else 0
 
     @property
     def is_melody(self) -> bool:
-        """True if this is a melody note (not accompaniment)."""
-        return self.b9 > 0
+        """True if this is a melody note (can decode string/fret)."""
+        # Unified format: check if byte 10 (fret + 1) is valid
+        if len(self.raw_data) >= 12 and self.raw_data[10] > 0:
+            # Also verify string encoding is valid (bits 3-5 of byte 6)
+            b6 = self.raw_data[6]
+            string_val = b6 & 0x38  # Bits 3-5 only
+            if string_val in (0, 8, 16, 24, 32):
+                return True
+        return False
 
     def decode_string_fret(self) -> tuple[int, int] | None:
-        """Decode string and fret from b11 for melody notes.
+        """Decode string and fret from note record.
 
         Returns (string, fret) tuple where string is 1-5 and fret is 0+.
-        Returns None for accompaniment notes (b9=0) which use chord-based encoding.
+        Returns None if decoding fails.
 
-        Encoding formula:
-        - fret_base = b11 // 64 (upper 2 bits)
-        - remainder = b11 % 64 (lower 6 bits)
-        - For strings 1-4 (remainder 0-31): string = remainder // 8 + 1, fret = fret_base
-        - For string 5 (remainder 32-63): string = 5, fret = fret_base + (remainder - 32) // 8
-
-        The 5th string (banjo short string) uses extended encoding because it's the
-        high drone string and needs extra fret positions in the lower bits.
+        Unified format (all TEF files):
+        - Byte 6: Position low byte with string encoded in bits 0-5
+          (values 0, 8, 16, 24, 32 map to strings 1-5)
+          Bits 6-7 are position high bits, not string data
+        - Byte 10: Fret + 1
+        - Byte 11: Marker (I, F, L)
         """
-        if self.b9 == 0:
-            return None  # Accompaniment uses different encoding
+        if len(self.raw_data) < 12:
+            return None
 
-        fret_base = self.b11 // 64
-        remainder = self.b11 % 64
+        # String from byte 6, bits 0-5 (values 0, 8, 16, 24, 32)
+        # Bits 6-7 are position extension, mask them off
+        b6 = self.raw_data[6]
+        string_val = b6 & 0x38  # Bits 3-5 only (0x38 = 0b00111000)
 
-        if remainder < 32:
-            # Strings 1-4: standard encoding
-            string = remainder // 8 + 1
-            fret = fret_base
-        else:
-            # String 5: extended encoding with fret offset in remainder
-            string = 5
-            fret = fret_base + (remainder - 32) // 8
+        # Valid string encodings: 0, 8, 16, 24, 32 -> strings 1-5
+        if string_val not in (0, 8, 16, 24, 32):
+            return None
+
+        string = string_val // 8 + 1
+
+        # Fret from byte 10 (value - 1)
+        fret = self.raw_data[10] - 1
 
         # Validate ranges
-        if not (1 <= string <= 5) or fret > 24:
+        if not (1 <= string <= 5) or fret < 0 or fret > 24:
             return None
 
         return (string, fret)
@@ -387,46 +404,82 @@ class TEFReader:
 
         return sections
 
-    def find_note_region(self) -> int:
-        """Find the start offset of the note event region.
+    def find_debt_offset(self) -> int:
+        """Find the note region start using the 'debt' header marker.
 
-        Searches for consecutive 12-byte records with valid markers (I/F/L/S).
-        Returns the offset or -1 if not found.
+        The 'debt' marker is followed by a 4-byte offset value that points
+        to 6 bytes AFTER the first note record. So notes start at (debt_value - 6).
+
+        Returns the note region start offset, or -1 if not found.
         """
-        for start in range(0x200, len(self.data) - 24, 4):
+        debt_pos = self.data.find(b'debt')
+        if debt_pos < 0:
+            return -1
+
+        # Read the 4-byte value after 'debt'
+        debt_val = struct.unpack('<I', self.data[debt_pos + 4:debt_pos + 8])[0]
+
+        # Notes start 6 bytes before the debt value
+        note_start = debt_val - 6
+
+        # Validate: check if we find valid markers at byte 11
+        if note_start + 12 <= len(self.data):
+            rec = self.data[note_start:note_start + 12]
+            if rec[11] in (0x49, 0x46, 0x4c):  # I, F, L markers
+                return note_start
+
+        return -1
+
+    def find_note_region(self) -> tuple[int, str]:
+        """Find the start offset of the note event region and format type.
+
+        Uses the unified format discovered via the 'debt' header:
+        - All files use 12-byte records with marker at byte 11
+        - String encoded in bits 3-5 of position low byte (byte 6)
+        - Fret in byte 10 (value - 1)
+        - Position in bytes 6-7 (low bytes) or extended with 0-5 for larger positions
+
+        Returns (offset, 'unified') or (-1, '') if not found.
+        """
+        # Try the debt header approach first
+        offset = self.find_debt_offset()
+        if offset >= 0:
+            return (offset, 'unified')
+
+        # Fallback: search for marker pattern at byte 11
+        for start in range(0x400, len(self.data) - 24, 4):
             rec1 = self.data[start:start+12]
             rec2 = self.data[start+12:start+24]
 
             if len(rec1) < 12 or len(rec2) < 12:
                 continue
 
-            m1, m2 = rec1[4], rec2[4]
+            # Check for valid markers at byte 11
+            if (rec1[11] in (0x49, 0x46, 0x4c) and
+                rec2[11] in (0x49, 0x46, 0x4c)):
+                return (start, 'unified')
 
-            # Valid markers: I=0x49, F=0x46, L=0x4c, S=0x00
-            if m1 in (0x49, 0x46, 0x4c, 0x00) and m2 in (0x49, 0x46, 0x4c, 0x00):
-                pos1 = struct.unpack('<H', rec1[0:2])[0]
-                pos2 = struct.unpack('<H', rec2[0:2])[0]
-                # Positions should be reasonable and non-decreasing
-                if 0 < pos1 < 2000 and pos1 <= pos2 < 2000:
-                    return start
-        return -1
+        return (-1, '')
 
     def parse_note_events(self, start_offset: int = -1) -> list[TEFNoteEvent]:
         """Parse note events from the file.
 
-        Note events are 12-byte records. Location is found dynamically.
-        Format:
-        - Bytes 0-1: Position (tick count, little-endian)
-        - Bytes 2-3: Type/track info
-        - Byte 4: Marker ('I'=Initial, 'F'=Fret, 'L'=Legato, 0=Special)
-        - Byte 5: Extra data (articulation)
-        - Bytes 6-11: Additional data
+        Note events are 12-byte records with unified format:
+        - Bytes 0-5: Extended position/flags (may be zeros for simple files)
+        - Byte 6: Position low byte (also contains string encoding in bits 3-5)
+        - Byte 7: Position high byte
+        - Bytes 8-9: Additional flags
+        - Byte 10: Fret + 1
+        - Byte 11: Marker ('I'=Initial, 'F'=Fret, 'L'=Legato)
+
+        String encoding: string = (byte6 & 0x38) >> 3 + 1  (values 0,8,16,24,32 map to strings 1-5)
         """
         events = []
+        format_type = 'unified'
 
         # Find note region if not specified
         if start_offset < 0:
-            start_offset = self.find_note_region()
+            start_offset, format_type = self.find_note_region()
             if start_offset < 0:
                 return events  # No notes found
 
@@ -436,10 +489,8 @@ class TEFReader:
         while offset + 12 <= len(self.data):
             record = self.data[offset:offset + 12]
 
-            pos = struct.unpack("<H", record[0:2])[0]
-            track = record[3]  # Byte 3 appears to be track/module ID
-            marker_byte = record[4]
-            extra = record[5]
+            # Unified format: marker at byte 11
+            marker_byte = record[11]
 
             # Decode marker
             if marker_byte == 0x49:  # 'I'
@@ -451,17 +502,29 @@ class TEFReader:
             elif marker_byte == 0x00:
                 marker = 'S'  # Special/section marker
             else:
-                marker = '?'
-
-            # Stop if position jumps backwards significantly or is too large
-            if pos > 5000 or (prev_pos >= 0 and pos < prev_pos - 50):
+                # Invalid marker - end of note region
                 break
 
-            # Skip if this looks like garbage (marker not recognized and position 0)
-            if pos == 0 and marker == '?' and offset > start_offset + 100:
+            # Position from bytes 6-7 only (bytes 0-5 contain flags/articulation, not position)
+            pos_low = struct.unpack("<H", record[6:8])[0]
+
+            # Clear the string encoding bits from position (bits 0-5 of low byte)
+            pos = pos_low & 0xFFC0
+
+            # Track/voice info from bytes 4-5
+            track = record[4] if record[4] != 0 else 1
+            extra = record[5]  # Articulation: 0=normal, 1=hammer-on, 2=pull-off, 3=slide
+
+            # For backward compatibility, keep pitch_byte (was b9 in old format)
+            pitch_byte = record[9]
+
+            # Stop if we see end marker pattern
+            if record[6:8] == b'\xff\xff' or record[10:12] == b'\xff\xff':
                 break
 
-            pitch_byte = record[9]  # Related to pitch
+            # Stop if position jumps way back (likely end of region)
+            if prev_pos >= 0 and pos < prev_pos - 1000 and pos == 0:
+                break
 
             events.append(TEFNoteEvent(
                 position=pos,
