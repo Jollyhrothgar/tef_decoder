@@ -1,0 +1,1216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OTF Viewer - Bluegrass Tablature</title>
+    <!-- js-yaml for YAML parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f0;
+        }
+        .header {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            background: #fff;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { margin: 0; font-size: 22px; color: #333; }
+        .subtitle { font-size: 12px; color: #888; margin-left: 10px; }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-left: auto;
+        }
+        button {
+            padding: 8px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            background: #fff;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        button:hover { background: #f0f0f0; border-color: #999; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.primary { background: #2d5a27; color: white; border-color: #2d5a27; }
+        button.primary:hover { background: #1e3d1a; }
+        button.playing { background: #d4a012; border-color: #b8890f; color: #333; }
+        #file-input { display: none; }
+        .meta {
+            background: #fff;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .meta h2 { margin: 0 0 12px 0; font-size: 26px; color: #222; }
+        .meta-row { display: flex; gap: 25px; flex-wrap: wrap; color: #666; font-size: 14px; }
+        .meta-item strong { color: #333; }
+        .track-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 0;
+            padding: 0 5px;
+        }
+        .track-tab {
+            padding: 10px 18px;
+            border: 1px solid #ccc;
+            border-bottom: none;
+            background: #e8e8e0;
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            font-weight: 500;
+            font-size: 13px;
+            transition: all 0.15s;
+        }
+        .track-tab:hover { background: #f0f0e8; }
+        .track-tab.active {
+            background: #fff;
+            border-color: #999;
+            position: relative;
+            z-index: 1;
+        }
+        .notation-container {
+            background: #fff;
+            padding: 25px;
+            border-radius: 0 8px 8px 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow-x: auto;
+            min-height: 400px;
+        }
+        .no-file {
+            text-align: center;
+            padding: 80px;
+            color: #888;
+            background: #fff;
+            border-radius: 8px;
+        }
+        .no-file p { margin: 10px 0; }
+        .no-file code {
+            background: #f0f0e8;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .tempo-control {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+        }
+        .tempo-control input {
+            width: 60px;
+            padding: 6px 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .track-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        .tuning-display {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .tuning-string {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #2d5a27;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .tuning-string.fifth { background: #8b4513; }
+        .instrument-icon {
+            font-size: 24px;
+            margin-right: 5px;
+        }
+        .stave-row {
+            margin-bottom: 25px;
+        }
+        .stave-row svg {
+            display: block;
+        }
+        .measure-group {
+            margin-bottom: 10px;
+        }
+        .playhead {
+            fill: rgba(212, 160, 18, 0.3);
+            stroke: #d4a012;
+            stroke-width: 2;
+        }
+        /* ASCII tab styling */
+        #ascii-tab {
+            font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre;
+            line-height: 1.5;
+            background: #fafaf5;
+            padding: 20px;
+            border-radius: 4px;
+            overflow-x: auto;
+            color: #333;
+        }
+        .view-toggle {
+            display: flex;
+            gap: 2px;
+            background: #e0e0d8;
+            padding: 3px;
+            border-radius: 6px;
+        }
+        .view-toggle button {
+            border: none;
+            background: transparent;
+            padding: 5px 12px;
+            font-size: 12px;
+            border-radius: 4px;
+        }
+        .view-toggle button.active {
+            background: #fff;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }
+        .playback-position {
+            font-size: 12px;
+            color: #666;
+            min-width: 80px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>OTF Viewer</h1>
+        <span class="subtitle">Bluegrass Tablature</span>
+        <div class="controls">
+            <button id="load-btn" class="primary">Load OTF</button>
+            <input type="file" id="file-input" accept=".yaml,.yml,.json">
+            <button id="play-btn" disabled>&#9658; Play</button>
+            <button id="stop-btn" disabled>&#9632; Stop</button>
+            <span class="playback-position" id="playback-pos"></span>
+            <div class="tempo-control">
+                <label>BPM:</label>
+                <input type="number" id="tempo" value="160" min="40" max="300">
+            </div>
+            <div class="view-toggle">
+                <button id="view-tab" class="active">Tab</button>
+                <button id="view-ascii">ASCII</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="content">
+        <div class="no-file">
+            <p><strong>Load an OTF file to view tablature</strong></p>
+            <p>Supports .otf.yaml and .otf.json files</p>
+            <p style="font-size: 12px; margin-top: 30px;">
+                Generate with: <code>tef otf myfile.tef</code>
+            </p>
+            <p style="font-size: 11px; color: #aaa; margin-top: 20px;">
+                Supports: 5-string banjo, mandolin, guitar, dobro, fiddle, bass
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // State
+        // ============================================================
+        let otfData = null;
+        let currentTrack = null;
+        let audioContext = null;
+        let isPlaying = false;
+        let scheduledNodes = [];
+        let playbackStartTime = 0;
+        let animationFrame = null;
+        let currentView = 'tab';
+
+        // ============================================================
+        // Constants
+        // ============================================================
+        const INSTRUMENT_ICONS = {
+            '5-string-banjo': '🪕',
+            'banjo': '🪕',
+            'mandolin': '🎸',
+            '6-string-guitar': '🎸',
+            'guitar': '🎸',
+            'dobro': '🎸',
+            'fiddle': '🎻',
+            'violin': '🎻',
+            'upright-bass': '🎸',
+            'bass': '🎸'
+        };
+
+        // Pitch name to MIDI
+        const PITCH_TO_MIDI = {};
+        ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].forEach((note, i) => {
+            for (let oct = 0; oct <= 8; oct++) {
+                PITCH_TO_MIDI[`${note}${oct}`] = 12 + oct * 12 + i;
+            }
+        });
+
+        function midiToFreq(midi) {
+            return 440 * Math.pow(2, (midi - 69) / 12);
+        }
+
+        // ============================================================
+        // SVG Tab Renderer with Stems, Flags, and Beams
+        // ============================================================
+        class TabRenderer {
+            constructor(container, options = {}) {
+                this.container = container;
+                this.options = {
+                    stringSpacing: 14,
+                    measureWidth: 200,
+                    measuresPerRow: 4,
+                    leftMargin: 50,
+                    topMargin: 40,
+                    stemAreaHeight: 28,
+                    fretFontSize: 12,
+                    stringColor: '#666',
+                    fretColor: '#222',
+                    measureLineColor: '#333',
+                    stemColor: '#333',
+                    beamColor: '#333',
+                    beamThickness: 3,
+                    stemWidth: 1.5,
+                    ...options
+                };
+            }
+
+            render(track, notation, ticksPerBeat = 480) {
+                this.container.innerHTML = '';
+                if (!track || !notation || notation.length === 0) {
+                    this.container.innerHTML = '<p style="color:#888;text-align:center;">No notation for this track</p>';
+                    return;
+                }
+
+                const numStrings = track.tuning?.length || 5;
+                const opt = this.options;
+                // Height = top margin + strings + stem area
+                const staveHeight = opt.topMargin + (numStrings - 1) * opt.stringSpacing + opt.stemAreaHeight + 10;
+
+                // Render track info header
+                this.renderTrackInfo(track);
+
+                // Group measures into rows
+                for (let rowStart = 0; rowStart < notation.length; rowStart += opt.measuresPerRow) {
+                    const rowMeasures = notation.slice(rowStart, rowStart + opt.measuresPerRow);
+                    this.renderRow(rowMeasures, numStrings, staveHeight, track.tuning);
+                }
+            }
+
+            renderTrackInfo(track) {
+                const info = document.createElement('div');
+                info.className = 'track-info';
+
+                const icon = INSTRUMENT_ICONS[track.instrument] || '🎵';
+                const tuningHtml = (track.tuning || []).map((t, i) => {
+                    const isFifth = track.instrument?.includes('banjo') && i === track.tuning.length - 1;
+                    return `<span class="tuning-string${isFifth ? ' fifth' : ''}">${t.replace(/\d/, '')}</span>`;
+                }).join('');
+
+                info.innerHTML = `
+                    <span class="instrument-icon">${icon}</span>
+                    <strong>${track.id}</strong>
+                    <span style="color:#888;font-size:13px;">${track.instrument}</span>
+                    <div class="tuning-display">${tuningHtml}</div>
+                `;
+                this.container.appendChild(info);
+            }
+
+            renderRow(measures, numStrings, height, tuning) {
+                const opt = this.options;
+                const width = opt.leftMargin + measures.length * opt.measureWidth + 20;
+
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'stave-row';
+
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('width', width);
+                svg.setAttribute('height', height);
+                svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+                // Draw string labels (tuning)
+                if (tuning) {
+                    tuning.forEach((pitch, i) => {
+                        const y = opt.topMargin + i * opt.stringSpacing;
+                        const label = pitch.replace(/\d/, '');
+                        const text = this.createText(10, y + 4, label, {
+                            fontSize: '11px',
+                            fill: '#666',
+                            fontWeight: '600'
+                        });
+                        svg.appendChild(text);
+                    });
+                }
+
+                // Draw horizontal string lines
+                const stringsBottom = opt.topMargin + (numStrings - 1) * opt.stringSpacing;
+                for (let s = 0; s < numStrings; s++) {
+                    const y = opt.topMargin + s * opt.stringSpacing;
+                    const line = this.createLine(
+                        opt.leftMargin - 10, y,
+                        opt.leftMargin + measures.length * opt.measureWidth, y,
+                        opt.stringColor
+                    );
+                    svg.appendChild(line);
+                }
+
+                // Beam Y position (bottom of stem area)
+                const beamY = stringsBottom + opt.stemAreaHeight - 4;
+
+                // Draw measures
+                measures.forEach((measure, mi) => {
+                    const x = opt.leftMargin + mi * opt.measureWidth;
+
+                    // Measure line (extends through stem area)
+                    const barLine = this.createLine(
+                        x, opt.topMargin,
+                        x, beamY + 4,
+                        opt.measureLineColor
+                    );
+                    svg.appendChild(barLine);
+
+                    // Measure number
+                    const numText = this.createText(x + 3, opt.topMargin - 8, measure.measure.toString(), {
+                        fontSize: '10px',
+                        fill: '#999'
+                    });
+                    svg.appendChild(numText);
+
+                    // Collect notes with positions for this measure
+                    const notePositions = [];
+                    if (measure.events) {
+                        measure.events.forEach(event => {
+                            // Convert tick to 16th note position (0-15)
+                            const pos16th = Math.floor(event.tick / 60);
+                            // Position within measure (0-1)
+                            const ticksPerMeasure = 960;
+                            const posRatio = event.tick / ticksPerMeasure;
+                            const noteX = x + 15 + posRatio * (opt.measureWidth - 30);
+
+                            // Find lowest string (highest number) for this event
+                            let lowestString = 0;
+                            event.notes.forEach(note => {
+                                if (note.s > lowestString) lowestString = note.s;
+                            });
+
+                            notePositions.push({
+                                x: noteX,
+                                pos16th,
+                                lowestString,
+                                event
+                            });
+
+                            // Draw fret numbers
+                            event.notes.forEach(note => {
+                                const stringIndex = note.s - 1;
+                                const noteY = opt.topMargin + stringIndex * opt.stringSpacing;
+
+                                // Background for fret number
+                                const fretStr = note.f.toString();
+                                const bgWidth = fretStr.length > 1 ? 16 : 12;
+                                const bg = this.createRect(
+                                    noteX - bgWidth/2, noteY - 7,
+                                    bgWidth, 14,
+                                    '#fff'
+                                );
+                                svg.appendChild(bg);
+
+                                // Fret number
+                                const fretText = this.createText(noteX, noteY + 4, fretStr, {
+                                    fontSize: `${opt.fretFontSize}px`,
+                                    fill: opt.fretColor,
+                                    fontWeight: '600',
+                                    textAnchor: 'middle'
+                                });
+                                svg.appendChild(fretText);
+
+                                // Store technique for slur rendering (don't draw "h" or "p" here)
+                                // Other techniques like "/" for slide can still show
+                                if (note.tech && note.tech !== 'h' && note.tech !== 'p') {
+                                    const techText = this.createText(noteX, noteY - 10, note.tech, {
+                                        fontSize: '9px',
+                                        fill: '#888',
+                                        textAnchor: 'middle'
+                                    });
+                                    svg.appendChild(techText);
+                                }
+                            });
+                        });
+                    }
+
+                    // Draw slurs for hammer-ons and pull-offs
+                    this.renderSlurs(svg, notePositions, opt);
+
+                    // Draw stems and beams
+                    this.renderStemsAndBeams(svg, notePositions, numStrings, opt, beamY);
+                });
+
+                // Final bar line
+                const endX = opt.leftMargin + measures.length * opt.measureWidth;
+                const endBar = this.createLine(
+                    endX, opt.topMargin,
+                    endX, beamY + 4,
+                    opt.measureLineColor
+                );
+                svg.appendChild(endBar);
+
+                rowDiv.appendChild(svg);
+                this.container.appendChild(rowDiv);
+            }
+
+            renderSlurs(svg, notePositions, opt) {
+                // Find consecutive notes with hammer-on or pull-off on the same string
+                // Sort by x position first
+                const sortedNotes = [...notePositions].sort((a, b) => a.x - b.x);
+
+                // Group notes by string to find slur pairs
+                const notesByString = {};
+                sortedNotes.forEach(np => {
+                    np.event.notes.forEach(note => {
+                        if (note.tech === 'h' || note.tech === 'p') {
+                            if (!notesByString[note.s]) {
+                                notesByString[note.s] = [];
+                            }
+                            notesByString[note.s].push({
+                                x: np.x,
+                                y: opt.topMargin + (note.s - 1) * opt.stringSpacing,
+                                tech: note.tech,
+                                fret: note.f
+                            });
+                        }
+                    });
+                });
+
+                // Draw slurs for each string
+                Object.values(notesByString).forEach(notes => {
+                    // Connect consecutive notes with slurs
+                    for (let i = 0; i < notes.length - 1; i++) {
+                        const n1 = notes[i];
+                        const n2 = notes[i + 1];
+
+                        // Only connect if they're close enough (within ~40px)
+                        if (n2.x - n1.x > 50) continue;
+
+                        const midX = (n1.x + n2.x) / 2;
+                        const slurY = n1.y - 8; // Just above the notes
+                        const curveDepth = 8;
+
+                        // Draw arc curving upward (away from notes) - like a smile
+                        const slur = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        const slurPath = `M ${n1.x + 6} ${slurY} Q ${midX} ${slurY - curveDepth} ${n2.x - 6} ${slurY}`;
+                        slur.setAttribute('d', slurPath);
+                        slur.setAttribute('fill', 'none');
+                        slur.setAttribute('stroke', '#555');
+                        slur.setAttribute('stroke-width', '1.5');
+                        svg.appendChild(slur);
+
+                        // Add technique label at the peak of the curve
+                        const label = n1.tech === 'h' ? 'H' : 'P';
+                        const labelText = this.createText(midX, slurY - curveDepth - 2, label, {
+                            fontSize: '9px',
+                            fill: '#555',
+                            fontWeight: '600',
+                            textAnchor: 'middle'
+                        });
+                        svg.appendChild(labelText);
+                    }
+                });
+            }
+
+            renderStemsAndBeams(svg, notePositions, numStrings, opt, beamY) {
+                if (notePositions.length === 0) return;
+
+                // Group notes by quarter-note beat (4 sixteenth positions each)
+                // This matches standard tablature beaming: 4 beats per measure
+                const beats = [[], [], [], []];
+                notePositions.forEach(np => {
+                    const beatIndex = Math.floor(np.pos16th / 4);
+                    if (beatIndex >= 0 && beatIndex < 4) {
+                        beats[beatIndex].push(np);
+                    }
+                });
+
+                // Track which notes are beamed
+                const beamedNotes = new Set();
+
+                // Draw beams for each beat that has 2+ notes
+                // In bluegrass (2/2 cut time with two-feel):
+                // - Primary beam connects all notes in the group (8th note level)
+                // - Secondary beam only connects consecutive 16th notes (partial beaming)
+                beats.forEach(beatNotes => {
+                    if (beatNotes.length >= 2) {
+                        // Sort by position
+                        beatNotes.sort((a, b) => a.pos16th - b.pos16th);
+
+                        // Account for stem width - beam extends to outer edges of stems
+                        const halfStem = opt.stemWidth / 2;
+                        const firstX = beatNotes[0].x - halfStem;
+                        const lastX = beatNotes[beatNotes.length - 1].x + halfStem;
+
+                        // Draw primary beam (spans all notes)
+                        const beam = this.createRect(
+                            firstX, beamY - opt.beamThickness,
+                            Math.max(lastX - firstX, 1), opt.beamThickness,
+                            opt.beamColor
+                        );
+                        svg.appendChild(beam);
+
+                        // Draw secondary beams only between consecutive 16th notes
+                        // A note is a 16th if: (1) it's at an odd position, OR
+                        // (2) it's at an even position and gap to next is 1
+                        const secondBeamY = beamY - opt.beamThickness - 4;
+
+                        const is16thNote = (note, nextNote) => {
+                            // Odd positions are always 16th notes
+                            if (note.pos16th % 2 === 1) return true;
+                            // Even positions are 16th only if gap to next is 1
+                            if (nextNote && nextNote.pos16th - note.pos16th === 1) return true;
+                            return false;
+                        };
+
+                        for (let i = 0; i < beatNotes.length - 1; i++) {
+                            const curr = beatNotes[i];
+                            const next = beatNotes[i + 1];
+                            const afterNext = beatNotes[i + 2]; // may be undefined
+                            const gap = next.pos16th - curr.pos16th;
+
+                            if (gap === 1) {
+                                // Check if BOTH notes are 16ths
+                                const currIs16th = is16thNote(curr, next);
+                                const nextIs16th = is16thNote(next, afterNext);
+
+                                if (currIs16th && nextIs16th) {
+                                    // Both are 16th notes - draw secondary beam
+                                    const secondBeam = this.createRect(
+                                        curr.x - halfStem, secondBeamY - opt.beamThickness,
+                                        Math.max(next.x - curr.x + opt.stemWidth, 1), opt.beamThickness,
+                                        opt.beamColor
+                                    );
+                                    svg.appendChild(secondBeam);
+                                }
+                            }
+                        }
+
+                        // Draw stems - extend to secondary beam only for notes in 16th pairs
+                        beatNotes.forEach((np, i) => {
+                            beamedNotes.add(np);
+                            const stemStartY = opt.topMargin + (np.lowestString - 1) * opt.stringSpacing + 7;
+
+                            // Check if this note has a secondary beam connection
+                            // (i.e., it's part of a 16th pair with both notes being 16ths)
+                            const prev = beatNotes[i - 1];
+                            const next = beatNotes[i + 1];
+                            const afterNext = beatNotes[i + 2];
+
+                            let hasSecondaryBeam = false;
+
+                            // Check connection to previous note
+                            if (prev) {
+                                const prevGap = np.pos16th - prev.pos16th;
+                                if (prevGap === 1) {
+                                    const prevIs16th = is16thNote(prev, np);
+                                    const thisIs16th = is16thNote(np, next);
+                                    if (prevIs16th && thisIs16th) {
+                                        hasSecondaryBeam = true;
+                                    }
+                                }
+                            }
+
+                            // Check connection to next note
+                            if (next && !hasSecondaryBeam) {
+                                const nextGap = next.pos16th - np.pos16th;
+                                if (nextGap === 1) {
+                                    const thisIs16th = is16thNote(np, next);
+                                    const nextIs16th = is16thNote(next, afterNext);
+                                    if (thisIs16th && nextIs16th) {
+                                        hasSecondaryBeam = true;
+                                    }
+                                }
+                            }
+
+                            // Stems extend through the beam (beam draws on top)
+                            const stemEndY = hasSecondaryBeam ? secondBeamY : beamY;
+
+                            const stem = this.createLine(
+                                np.x, stemStartY,
+                                np.x, stemEndY,
+                                opt.stemColor
+                            );
+                            stem.setAttribute('stroke-width', opt.stemWidth);
+                            svg.appendChild(stem);
+                        });
+                    }
+                });
+
+                // Draw stems/flags for single notes (not beamed)
+                // In bluegrass 2/2:
+                // - Whole note (16 positions) = no stem
+                // - Half note (8 positions) = half-length stem from bottom, not attached
+                // - Quarter note (4 positions) = stem only, no flag
+                // - Eighth note (2 positions) = stem + one flag
+                // - Sixteenth (1 position) = stem + two flags
+                const sortedByPos = [...notePositions].sort((a, b) => a.pos16th - b.pos16th);
+
+                notePositions.forEach((np, idx) => {
+                    if (beamedNotes.has(np)) return;
+
+                    // Calculate duration by gap to next note (in positions)
+                    const sortedIdx = sortedByPos.findIndex(n => n === np);
+                    let gapPositions = 4; // Default to quarter note if last note
+                    if (sortedIdx < sortedByPos.length - 1) {
+                        gapPositions = sortedByPos[sortedIdx + 1].pos16th - np.pos16th;
+                    }
+
+                    const stemStartY = opt.topMargin + (np.lowestString - 1) * opt.stringSpacing + 7;
+                    const stemEndY = beamY;
+                    const staffBottom = opt.topMargin + (numStrings - 1) * opt.stringSpacing;
+
+                    if (gapPositions >= 16) {
+                        // Whole note - no stem at all
+                        // (do nothing)
+                    } else if (gapPositions >= 8) {
+                        // Half note - half-length stem from bottom of staff, not attached to note
+                        const halfStemStartY = staffBottom + 4;
+                        const halfStemEndY = beamY;
+                        const stem = this.createLine(
+                            np.x, halfStemStartY,
+                            np.x, halfStemEndY,
+                            opt.stemColor
+                        );
+                        stem.setAttribute('stroke-width', opt.stemWidth);
+                        svg.appendChild(stem);
+                    } else if (gapPositions >= 4) {
+                        // Quarter note - stem only, no flag
+                        const stem = this.createLine(
+                            np.x, stemStartY,
+                            np.x, stemEndY,
+                            opt.stemColor
+                        );
+                        stem.setAttribute('stroke-width', opt.stemWidth);
+                        svg.appendChild(stem);
+                    } else if (gapPositions >= 2) {
+                        // Eighth note - stem + one flag
+                        // Flag attaches to right side of stem
+                        const stemX = np.x;
+                        const flagStartX = stemX + opt.stemWidth / 2;
+                        const flagY = stemEndY - 2;
+
+                        const stem = this.createLine(
+                            stemX, stemStartY,
+                            stemX, stemEndY,
+                            opt.stemColor
+                        );
+                        stem.setAttribute('stroke-width', opt.stemWidth);
+                        svg.appendChild(stem);
+
+                        // Flag: starts at stem, curves out and down
+                        const flag = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        flag.setAttribute('d', `M ${flagStartX} ${flagY - 8} L ${flagStartX} ${flagY} Q ${flagStartX + 8} ${flagY + 2} ${flagStartX + 10} ${flagY + 8} Q ${flagStartX + 6} ${flagY + 4} ${flagStartX} ${flagY - 2} Z`);
+                        flag.setAttribute('fill', opt.stemColor);
+                        svg.appendChild(flag);
+                    } else {
+                        // Sixteenth note - stem + two flags
+                        const stemX = np.x;
+                        const flagStartX = stemX + opt.stemWidth / 2;
+                        const flag1Y = stemEndY - 2;
+                        const flag2Y = stemEndY - 9;
+
+                        const stem = this.createLine(
+                            stemX, stemStartY,
+                            stemX, stemEndY,
+                            opt.stemColor
+                        );
+                        stem.setAttribute('stroke-width', opt.stemWidth);
+                        svg.appendChild(stem);
+
+                        // First flag (bottom)
+                        const flag1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        flag1.setAttribute('d', `M ${flagStartX} ${flag1Y - 8} L ${flagStartX} ${flag1Y} Q ${flagStartX + 8} ${flag1Y + 2} ${flagStartX + 10} ${flag1Y + 8} Q ${flagStartX + 6} ${flag1Y + 4} ${flagStartX} ${flag1Y - 2} Z`);
+                        flag1.setAttribute('fill', opt.stemColor);
+                        svg.appendChild(flag1);
+
+                        // Second flag (above first)
+                        const flag2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        flag2.setAttribute('d', `M ${flagStartX} ${flag2Y - 8} L ${flagStartX} ${flag2Y} Q ${flagStartX + 8} ${flag2Y + 2} ${flagStartX + 10} ${flag2Y + 8} Q ${flagStartX + 6} ${flag2Y + 4} ${flagStartX} ${flag2Y - 2} Z`);
+                        flag2.setAttribute('fill', opt.stemColor);
+                        svg.appendChild(flag2);
+                    }
+                });
+            }
+
+            createLine(x1, y1, x2, y2, stroke) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.setAttribute('stroke', stroke);
+                line.setAttribute('stroke-width', '1');
+                return line;
+            }
+
+            createText(x, y, content, attrs = {}) {
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y);
+                text.textContent = content;
+                Object.entries(attrs).forEach(([key, value]) => {
+                    const attr = key.replace(/([A-Z])/g, '-$1').toLowerCase();
+                    text.setAttribute(attr, value);
+                });
+                return text;
+            }
+
+            createRect(x, y, width, height, fill) {
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', x);
+                rect.setAttribute('y', y);
+                rect.setAttribute('width', width);
+                rect.setAttribute('height', height);
+                rect.setAttribute('fill', fill);
+                return rect;
+            }
+        }
+
+        // ============================================================
+        // ASCII Tab Renderer
+        // ============================================================
+        function renderAsciiTab(track, notation) {
+            if (!track || !notation) return 'No notation available';
+
+            const numStrings = track.tuning?.length || 5;
+            const charsPerMeasure = 16;
+            const measuresPerLine = 4;
+
+            let ascii = '';
+            ascii += `${otfData.metadata?.title || 'Untitled'}\n`;
+            ascii += `${track.id} (${track.instrument})\n`;
+            ascii += `Tuning: ${track.tuning?.join(' - ') || 'Standard'}\n`;
+            ascii += '\n';
+
+            for (let lineStart = 0; lineStart < notation.length; lineStart += measuresPerLine) {
+                const lineMeasures = notation.slice(lineStart, lineStart + measuresPerLine);
+
+                // Build string arrays
+                const stringLines = Array.from({length: numStrings}, () => []);
+
+                lineMeasures.forEach((measure, mi) => {
+                    const measureChars = Array.from({length: numStrings}, () =>
+                        Array(charsPerMeasure).fill('-')
+                    );
+
+                    if (measure.events) {
+                        measure.events.forEach(event => {
+                            // Map tick to character position
+                            // 960 ticks per measure / 16 chars = 60 ticks per char
+                            const pos = Math.min(Math.floor(event.tick / 60), charsPerMeasure - 1);
+
+                            event.notes.forEach(note => {
+                                const stringIdx = note.s - 1;
+                                if (stringIdx >= 0 && stringIdx < numStrings) {
+                                    measureChars[stringIdx][pos] = note.f.toString();
+                                    // Handle double-digit frets
+                                    if (note.f >= 10 && pos + 1 < charsPerMeasure) {
+                                        measureChars[stringIdx][pos] = Math.floor(note.f / 10).toString();
+                                        measureChars[stringIdx][pos + 1] = (note.f % 10).toString();
+                                    }
+                                }
+                            });
+                        });
+                    }
+
+                    measureChars.forEach((chars, si) => {
+                        stringLines[si].push(chars.join(''));
+                    });
+                });
+
+                // Measure numbers
+                let numLine = '  ';
+                lineMeasures.forEach(m => {
+                    numLine += m.measure.toString().padEnd(charsPerMeasure + 1);
+                });
+                ascii += numLine + '\n';
+
+                // String lines with tuning labels
+                stringLines.forEach((parts, si) => {
+                    const label = track.tuning?.[si]?.replace(/\d/, '') || (si + 1).toString();
+                    ascii += label.padStart(2) + '|' + parts.join('|') + '|\n';
+                });
+
+                ascii += '\n';
+            }
+
+            return ascii;
+        }
+
+        // ============================================================
+        // File Loading
+        // ============================================================
+        document.getElementById('load-btn').addEventListener('click', () => {
+            document.getElementById('file-input').click();
+        });
+
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const text = await file.text();
+            try {
+                if (file.name.endsWith('.json')) {
+                    otfData = JSON.parse(text);
+                } else {
+                    otfData = jsyaml.load(text);
+                }
+                renderDocument();
+                document.getElementById('play-btn').disabled = false;
+                document.getElementById('stop-btn').disabled = false;
+            } catch (err) {
+                alert('Error parsing file: ' + err.message);
+                console.error(err);
+            }
+        });
+
+        // ============================================================
+        // View Toggle
+        // ============================================================
+        document.getElementById('view-tab').addEventListener('click', () => {
+            currentView = 'tab';
+            document.getElementById('view-tab').classList.add('active');
+            document.getElementById('view-ascii').classList.remove('active');
+            if (currentTrack) renderTrack(currentTrack);
+        });
+
+        document.getElementById('view-ascii').addEventListener('click', () => {
+            currentView = 'ascii';
+            document.getElementById('view-ascii').classList.add('active');
+            document.getElementById('view-tab').classList.remove('active');
+            if (currentTrack) renderTrack(currentTrack);
+        });
+
+        // ============================================================
+        // Rendering
+        // ============================================================
+        function renderDocument() {
+            if (!otfData) return;
+
+            const content = document.getElementById('content');
+            content.innerHTML = '';
+
+            // Metadata
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.innerHTML = `
+                <h2>${otfData.metadata?.title || 'Untitled'}</h2>
+                <div class="meta-row">
+                    <div class="meta-item"><strong>Time:</strong> ${otfData.metadata?.time_signature || '4/4'}</div>
+                    <div class="meta-item"><strong>Tempo:</strong> ${otfData.metadata?.tempo || 120} BPM</div>
+                    ${otfData.metadata?.composer ? `<div class="meta-item"><strong>Composer:</strong> ${otfData.metadata.composer}</div>` : ''}
+                    ${otfData.metadata?.key ? `<div class="meta-item"><strong>Key:</strong> ${otfData.metadata.key}</div>` : ''}
+                    ${otfData.reading_list ? `<div class="meta-item"><strong>Reading list:</strong> ${otfData.reading_list.length} entries</div>` : ''}
+                </div>
+            `;
+            content.appendChild(meta);
+
+            // Update tempo control
+            document.getElementById('tempo').value = otfData.metadata?.tempo || 160;
+
+            // Track tabs
+            if (otfData.tracks && otfData.tracks.length > 0) {
+                const tabs = document.createElement('div');
+                tabs.className = 'track-tabs';
+
+                otfData.tracks.forEach((track, i) => {
+                    const icon = INSTRUMENT_ICONS[track.instrument] || '🎵';
+                    const tab = document.createElement('button');
+                    tab.className = 'track-tab' + (i === 0 ? ' active' : '');
+                    tab.innerHTML = `${icon} ${track.id}`;
+                    tab.onclick = () => selectTrack(track.id);
+                    tabs.appendChild(tab);
+                });
+
+                content.appendChild(tabs);
+                currentTrack = otfData.tracks[0].id;
+            }
+
+            // Notation container
+            const notationDiv = document.createElement('div');
+            notationDiv.className = 'notation-container';
+            notationDiv.id = 'notation';
+            content.appendChild(notationDiv);
+
+            renderTrack(currentTrack);
+        }
+
+        function selectTrack(trackId) {
+            currentTrack = trackId;
+            document.querySelectorAll('.track-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.textContent.includes(trackId));
+            });
+            renderTrack(trackId);
+        }
+
+        function renderTrack(trackId) {
+            const container = document.getElementById('notation');
+            if (!container) return;
+
+            const track = otfData.tracks?.find(t => t.id === trackId);
+            const notation = otfData.notation?.[trackId];
+
+            if (currentView === 'ascii') {
+                container.innerHTML = '';
+                const pre = document.createElement('pre');
+                pre.id = 'ascii-tab';
+                pre.textContent = renderAsciiTab(track, notation);
+                container.appendChild(pre);
+            } else {
+                const renderer = new TabRenderer(container);
+                renderer.render(track, notation, otfData.timing?.ticks_per_beat || 480);
+            }
+        }
+
+        // ============================================================
+        // Audio Playback
+        // ============================================================
+        document.getElementById('play-btn').addEventListener('click', startPlayback);
+        document.getElementById('stop-btn').addEventListener('click', stopPlayback);
+
+        function startPlayback() {
+            if (isPlaying || !otfData) return;
+
+            isPlaying = true;
+            document.getElementById('play-btn').classList.add('playing');
+            document.getElementById('play-btn').textContent = '▶ Playing';
+
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+
+            const track = otfData.tracks?.find(t => t.id === currentTrack);
+            const notation = otfData.notation?.[currentTrack];
+            if (!track || !notation) return;
+
+            // Get tuning as MIDI notes
+            const tuning = track.tuning?.map(p => PITCH_TO_MIDI[p] || 60) || [62, 59, 55, 50, 67];
+
+            const bpm = parseInt(document.getElementById('tempo').value) || 160;
+            const ticksPerBeat = otfData.timing?.ticks_per_beat || 480;
+            const secondsPerTick = 60 / bpm / ticksPerBeat;
+
+            // Collect all notes with absolute timing
+            // In 2/2 time, each measure has 2 beats = 960 ticks
+            const ticksPerMeasure = 2 * ticksPerBeat;
+            const notes = [];
+            notation.forEach(measure => {
+                const measureTick = (measure.measure - 1) * ticksPerMeasure;
+                measure.events?.forEach(event => {
+                    const absTick = measureTick + event.tick;
+                    event.notes.forEach(note => {
+                        const stringIdx = note.s - 1;
+                        if (stringIdx >= 0 && stringIdx < tuning.length) {
+                            const midi = tuning[stringIdx] + note.f;
+                            notes.push({
+                                time: absTick * secondsPerTick,
+                                midi: midi,
+                                duration: 0.3,
+                                measure: measure.measure
+                            });
+                        }
+                    });
+                });
+            });
+
+            // Sort by time
+            notes.sort((a, b) => a.time - b.time);
+
+            // Schedule all notes
+            playbackStartTime = audioContext.currentTime + 0.1;
+            scheduledNodes = [];
+
+            notes.forEach(note => {
+                const startTime = playbackStartTime + note.time;
+                scheduleNote(note.midi, startTime, note.duration);
+            });
+
+            // Update position display
+            const totalDuration = notes.length > 0 ? notes[notes.length - 1].time + 1 : 0;
+            updatePlaybackPosition(0, totalDuration);
+
+            function updateLoop() {
+                if (!isPlaying) return;
+                const elapsed = audioContext.currentTime - playbackStartTime;
+                updatePlaybackPosition(elapsed, totalDuration);
+                if (elapsed < totalDuration) {
+                    animationFrame = requestAnimationFrame(updateLoop);
+                } else {
+                    stopPlayback();
+                }
+            }
+            animationFrame = requestAnimationFrame(updateLoop);
+        }
+
+        function updatePlaybackPosition(elapsed, total) {
+            const pos = document.getElementById('playback-pos');
+            if (elapsed < 0) elapsed = 0;
+            const formatTime = (s) => {
+                const mins = Math.floor(s / 60);
+                const secs = Math.floor(s % 60);
+                return `${mins}:${secs.toString().padStart(2, '0')}`;
+            };
+            pos.textContent = `${formatTime(elapsed)} / ${formatTime(total)}`;
+        }
+
+        function scheduleNote(midi, startTime, duration) {
+            // Use a combination of oscillators for a plucked string sound
+            const freq = midiToFreq(midi);
+
+            // Main tone
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            const filter = audioContext.createBiquadFilter();
+
+            osc.type = 'triangle';
+            osc.frequency.value = freq;
+
+            // Low-pass filter for mellow tone
+            filter.type = 'lowpass';
+            filter.frequency.value = 2000;
+            filter.Q.value = 1;
+
+            // Plucked envelope
+            gain.gain.setValueAtTime(0, startTime);
+            gain.gain.linearRampToValueAtTime(0.2, startTime + 0.005);
+            gain.gain.exponentialRampToValueAtTime(0.1, startTime + 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+            gain.gain.linearRampToValueAtTime(0, startTime + duration + 0.01);
+
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(audioContext.destination);
+
+            osc.start(startTime);
+            osc.stop(startTime + duration + 0.02);
+
+            scheduledNodes.push({osc, gain});
+
+            // Add subtle harmonics
+            const harmOsc = audioContext.createOscillator();
+            const harmGain = audioContext.createGain();
+            harmOsc.type = 'sine';
+            harmOsc.frequency.value = freq * 2;
+            harmGain.gain.setValueAtTime(0, startTime);
+            harmGain.gain.linearRampToValueAtTime(0.05, startTime + 0.003);
+            harmGain.gain.exponentialRampToValueAtTime(0.001, startTime + duration * 0.5);
+            harmOsc.connect(harmGain);
+            harmGain.connect(audioContext.destination);
+            harmOsc.start(startTime);
+            harmOsc.stop(startTime + duration);
+            scheduledNodes.push({osc: harmOsc, gain: harmGain});
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('play-btn').classList.remove('playing');
+            document.getElementById('play-btn').textContent = '▶ Play';
+
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+
+            // Stop all scheduled nodes
+            scheduledNodes.forEach(({osc, gain}) => {
+                try {
+                    gain.gain.cancelScheduledValues(audioContext.currentTime);
+                    gain.gain.setValueAtTime(gain.gain.value, audioContext.currentTime);
+                    gain.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.05);
+                    osc.stop(audioContext.currentTime + 0.1);
+                } catch (e) {
+                    // Already stopped
+                }
+            });
+            scheduledNodes = [];
+
+            document.getElementById('playback-pos').textContent = '';
+        }
+
+        // ============================================================
+        // Keyboard Shortcuts
+        // ============================================================
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (isPlaying) {
+                    stopPlayback();
+                } else if (!document.getElementById('play-btn').disabled) {
+                    startPlayback();
+                }
+            }
+        });
+
+        // ============================================================
+        // Drag and Drop
+        // ============================================================
+        document.body.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        document.body.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const file = e.dataTransfer.files[0];
+            if (!file) return;
+
+            if (!file.name.match(/\.(yaml|yml|json)$/i)) {
+                alert('Please drop an OTF file (.yaml, .yml, or .json)');
+                return;
+            }
+
+            const text = await file.text();
+            try {
+                if (file.name.endsWith('.json')) {
+                    otfData = JSON.parse(text);
+                } else {
+                    otfData = jsyaml.load(text);
+                }
+                renderDocument();
+                document.getElementById('play-btn').disabled = false;
+                document.getElementById('stop-btn').disabled = false;
+            } catch (err) {
+                alert('Error parsing file: ' + err.message);
+                console.error(err);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -321,6 +321,52 @@ def cmd_midi(args):
     return 0
 
 
+def cmd_otf(args):
+    """Export TEF file to OTF (Open Tab Format)."""
+    from .otf import tef_to_otf
+
+    path = Path(args.input)
+    if not path.exists():
+        print(f"Error: File not found: {path}", file=sys.stderr)
+        return 1
+
+    reader = TEFReader(path)
+    tef = reader.parse()
+
+    # Convert to OTF
+    otf_doc = tef_to_otf(tef)
+
+    # Determine output format and path
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        suffix = ".otf.json" if args.json else ".otf.yaml"
+        output_path = path.with_suffix(suffix)
+
+    # Generate output
+    if args.json or output_path.suffix == ".json":
+        content = otf_doc.to_json(indent=2)
+    else:
+        content = otf_doc.to_yaml()
+
+    # Write or print
+    if args.stdout:
+        print(content)
+    else:
+        output_path.write_text(content)
+        print(f"Wrote {output_path}")
+        print(f"  Tracks: {len(otf_doc.tracks)}")
+        total_notes = sum(
+            sum(len(e.notes) for m in measures for e in m.events)
+            for measures in otf_doc.notation.values()
+        )
+        print(f"  Notes: {total_notes}")
+        if otf_doc.reading_list:
+            print(f"  Reading list: {len(otf_doc.reading_list)} entries")
+
+    return 0
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -355,6 +401,14 @@ def main():
                         help='Track index to export (default: 0, use -1 for all)')
     p_midi.add_argument('-l', '--list', action='store_true', help='List tracks and exit')
     p_midi.set_defaults(func=cmd_midi)
+
+    # otf command
+    p_otf = subparsers.add_parser('otf', help='Export TEF file to OTF (Open Tab Format)')
+    p_otf.add_argument('input', help='Input TEF file')
+    p_otf.add_argument('output', nargs='?', help='Output OTF file (default: input.otf.yaml)')
+    p_otf.add_argument('--json', action='store_true', help='Output as JSON instead of YAML')
+    p_otf.add_argument('--stdout', action='store_true', help='Print to stdout instead of file')
+    p_otf.set_defaults(func=cmd_otf)
 
     args = parser.parse_args()
 
