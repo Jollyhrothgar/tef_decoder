@@ -6,6 +6,14 @@
     <title>OTF Viewer - Bluegrass Tablature</title>
     <!-- js-yaml for YAML parsing -->
     <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+    <!-- WebAudioFont for instrument sounds -->
+    <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
+    <!-- Instruments: Banjo, Acoustic Guitar, Acoustic Bass, Violin, Steel Guitar -->
+    <script src="https://surikov.github.io/webaudiofontdata/sound/1050_FluidR3_GM_sf2_file.js"></script>
+    <script src="https://surikov.github.io/webaudiofontdata/sound/0251_GeneralUserGS_sf2_file.js"></script>
+    <script src="https://surikov.github.io/webaudiofontdata/sound/0320_GeneralUserGS_sf2_file.js"></script>
+    <script src="https://surikov.github.io/webaudiofontdata/sound/0400_GeneralUserGS_sf2_file.js"></script>
+    <script src="https://surikov.github.io/webaudiofontdata/sound/0260_GeneralUserGS_sf2_file.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -245,6 +253,37 @@
         let playbackStartTime = 0;
         let animationFrame = null;
         let currentView = 'tab';
+        let player = null;
+        let instrumentsLoaded = false;
+
+        // WebAudioFont instrument mapping
+        const INSTRUMENTS = {
+            banjo: { var: '_tone_1050_FluidR3_GM_sf2_file', name: 'Banjo' },
+            guitar: { var: '_tone_0251_GeneralUserGS_sf2_file', name: 'Acoustic Guitar' },
+            bass: { var: '_tone_0320_GeneralUserGS_sf2_file', name: 'Acoustic Bass' },
+            violin: { var: '_tone_0400_GeneralUserGS_sf2_file', name: 'Violin' },
+            mandolin: { var: '_tone_0260_GeneralUserGS_sf2_file', name: 'Steel Guitar (for mandolin)' },
+            dobro: { var: '_tone_0260_GeneralUserGS_sf2_file', name: 'Steel Guitar' },
+        };
+
+        // Map OTF instrument types to our instrument keys
+        function getInstrumentKey(instrumentType) {
+            if (!instrumentType) return 'guitar';
+            const t = instrumentType.toLowerCase();
+            if (t.includes('banjo')) return 'banjo';
+            if (t.includes('mandolin')) return 'mandolin';
+            if (t.includes('bass')) return 'bass';
+            if (t.includes('fiddle') || t.includes('violin')) return 'violin';
+            if (t.includes('dobro') || t.includes('resonator')) return 'dobro';
+            return 'guitar';
+        }
+
+        // Get WebAudioFont instrument data
+        function getInstrumentData(instrumentType) {
+            const key = getInstrumentKey(instrumentType);
+            const inst = INSTRUMENTS[key];
+            return window[inst.var];
+        }
 
         // ============================================================
         // Constants
@@ -269,10 +308,6 @@
                 PITCH_TO_MIDI[`${note}${oct}`] = 12 + oct * 12 + i;
             }
         });
-
-        function midiToFreq(midi) {
-            return 440 * Math.pow(2, (midi - 69) / 12);
-        }
 
         // ============================================================
         // SVG Tab Renderer with Stems, Flags, and Beams
@@ -1058,9 +1093,24 @@
                 audioContext.resume();
             }
 
+            // Initialize WebAudioFont player
+            if (!player) {
+                player = new WebAudioFontPlayer();
+                // Decode all instruments
+                Object.values(INSTRUMENTS).forEach(inst => {
+                    const data = window[inst.var];
+                    if (data) {
+                        player.adjustPreset(audioContext, data);
+                    }
+                });
+            }
+
             const track = otfData.tracks?.find(t => t.id === currentTrack);
             const notation = otfData.notation?.[currentTrack];
             if (!track || !notation) return;
+
+            // Get instrument sound for this track
+            const instrumentData = getInstrumentData(track.instrument);
 
             // Get tuning as MIDI notes
             const tuning = track.tuning?.map(p => PITCH_TO_MIDI[p] || 60) || [62, 59, 55, 50, 67];
@@ -1084,7 +1134,7 @@
                             notes.push({
                                 time: absTick * secondsPerTick,
                                 midi: midi,
-                                duration: 0.3,
+                                duration: 0.5,
                                 measure: measure.measure
                             });
                         }
@@ -1095,13 +1145,24 @@
             // Sort by time
             notes.sort((a, b) => a.time - b.time);
 
-            // Schedule all notes
+            // Schedule all notes using WebAudioFont
             playbackStartTime = audioContext.currentTime + 0.1;
             scheduledNodes = [];
 
             notes.forEach(note => {
                 const startTime = playbackStartTime + note.time;
-                scheduleNote(note.midi, startTime, note.duration);
+                if (instrumentData) {
+                    const envelope = player.queueWaveTable(
+                        audioContext,
+                        audioContext.destination,
+                        instrumentData,
+                        startTime,
+                        note.midi,
+                        note.duration,
+                        0.7  // volume
+                    );
+                    scheduledNodes.push(envelope);
+                }
             });
 
             // Update position display
@@ -1132,54 +1193,6 @@
             pos.textContent = `${formatTime(elapsed)} / ${formatTime(total)}`;
         }
 
-        function scheduleNote(midi, startTime, duration) {
-            // Use a combination of oscillators for a plucked string sound
-            const freq = midiToFreq(midi);
-
-            // Main tone
-            const osc = audioContext.createOscillator();
-            const gain = audioContext.createGain();
-            const filter = audioContext.createBiquadFilter();
-
-            osc.type = 'triangle';
-            osc.frequency.value = freq;
-
-            // Low-pass filter for mellow tone
-            filter.type = 'lowpass';
-            filter.frequency.value = 2000;
-            filter.Q.value = 1;
-
-            // Plucked envelope
-            gain.gain.setValueAtTime(0, startTime);
-            gain.gain.linearRampToValueAtTime(0.2, startTime + 0.005);
-            gain.gain.exponentialRampToValueAtTime(0.1, startTime + 0.1);
-            gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
-            gain.gain.linearRampToValueAtTime(0, startTime + duration + 0.01);
-
-            osc.connect(filter);
-            filter.connect(gain);
-            gain.connect(audioContext.destination);
-
-            osc.start(startTime);
-            osc.stop(startTime + duration + 0.02);
-
-            scheduledNodes.push({osc, gain});
-
-            // Add subtle harmonics
-            const harmOsc = audioContext.createOscillator();
-            const harmGain = audioContext.createGain();
-            harmOsc.type = 'sine';
-            harmOsc.frequency.value = freq * 2;
-            harmGain.gain.setValueAtTime(0, startTime);
-            harmGain.gain.linearRampToValueAtTime(0.05, startTime + 0.003);
-            harmGain.gain.exponentialRampToValueAtTime(0.001, startTime + duration * 0.5);
-            harmOsc.connect(harmGain);
-            harmGain.connect(audioContext.destination);
-            harmOsc.start(startTime);
-            harmOsc.stop(startTime + duration);
-            scheduledNodes.push({osc: harmOsc, gain: harmGain});
-        }
-
         function stopPlayback() {
             isPlaying = false;
             document.getElementById('play-btn').classList.remove('playing');
@@ -1190,17 +1203,10 @@
                 animationFrame = null;
             }
 
-            // Stop all scheduled nodes
-            scheduledNodes.forEach(({osc, gain}) => {
-                try {
-                    gain.gain.cancelScheduledValues(audioContext.currentTime);
-                    gain.gain.setValueAtTime(gain.gain.value, audioContext.currentTime);
-                    gain.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.05);
-                    osc.stop(audioContext.currentTime + 0.1);
-                } catch (e) {
-                    // Already stopped
-                }
-            });
+            // Cancel all scheduled WebAudioFont notes
+            if (player) {
+                player.cancelQueue(audioContext);
+            }
             scheduledNodes = [];
 
             document.getElementById('playback-pos').textContent = '';
