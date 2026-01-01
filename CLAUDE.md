@@ -5,10 +5,10 @@ Reverse engineering the TablEdit `.tef` file format to preserve tablature arrang
 ## Quick Start
 
 ```bash
-./scripts/bootstrap                    # Install deps
-./scripts/utility parse sample.tef     # Parse and show structure
-./scripts/utility midi sample.tef      # Export to MIDI
-uv run pytest                          # Run tests
+uv tool install .         # Install CLI globally
+tef parse sample.tef      # Parse and show structure
+tef midi sample.tef       # Export to MIDI
+uv run pytest             # Run tests
 ```
 
 ## Project Structure
@@ -22,10 +22,8 @@ TablEdit_Reverse/
 │   └── songs/                # Complete song files (v2 and v3)
 ├── src/tef_parser/           # Core parser
 │   ├── __init__.py
-│   └── reader.py             # TEFReader class (v2 + v3 support)
-├── scripts/
-│   ├── utility               # CLI commands (parse, midi, view, version)
-│   └── lib/                  # Python implementations
+│   ├── reader.py             # TEFReader class (v2 + v3 support)
+│   └── cli.py                # CLI entry point
 ├── tests/
 │   ├── test_parser.py        # Unit tests
 │   └── 01-03_*/              # Integration test fixtures
@@ -40,6 +38,30 @@ TablEdit_Reverse/
 | **V3** (3.00+) | `shuck_the_corn.tef`, `angeline_the_baker.tef` | Working |
 
 The parser auto-detects version and uses the appropriate decoder.
+
+## CLI Commands
+
+```bash
+# Parse and show file structure
+tef parse samples/songs/shuck_the_corn.tef
+
+# Export to MIDI (single track)
+tef midi samples/songs/shuck_the_corn.tef output.mid
+
+# Export specific track (0=first instrument)
+tef midi -t 0 input.tef output.mid
+
+# List tracks without exporting
+tef midi -l input.tef
+
+# Show file version
+tef version input.tef
+
+# View as ASCII timeline
+tef view input.tef
+```
+
+For development without global install: `uv run tef <command>`
 
 ## TEF Format Summary
 
@@ -105,25 +127,6 @@ midi_pitch = 96 - tuning_byte
 - Mandolin GDAE: [76, 69, 62, 55] (E5, A4, D4, G3)
 - Bass: [43, 38, 33, 28] (G2, D2, A1, E1)
 
-## CLI Commands
-
-```bash
-# Parse and show file structure
-./scripts/utility parse samples/songs/shuck_the_corn.tef
-
-# Export to MIDI (single track)
-./scripts/utility midi samples/songs/shuck_the_corn.tef output.mid
-
-# Export specific track (0=first instrument)
-./scripts/utility midi -t 0 input.tef output.mid
-
-# List tracks without exporting
-./scripts/utility midi -l input.tef
-
-# Show file version
-./scripts/utility version input.tef
-```
-
 ## Test Files
 
 ### Key Reference Files
@@ -148,7 +151,7 @@ uv run pytest -v
 
 # Test specific file
 uv run python3 -c "
-from src.tef_parser import TEFReader
+from tef_parser import TEFReader
 tef = TEFReader('samples/songs/shuck_the_corn.tef').parse()
 print(tef.dump())
 "
