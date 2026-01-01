@@ -205,6 +205,60 @@
             color: #666;
             min-width: 80px;
         }
+        .mixer {
+            background: #fff;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .mixer.visible { display: block; }
+        .mixer h3 { margin: 0 0 12px 0; font-size: 14px; color: #666; }
+        .mixer-channels {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .mixer-channel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 80px;
+        }
+        .mixer-channel label {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 5px;
+            text-transform: capitalize;
+        }
+        .mixer-channel input[type="range"] {
+            writing-mode: vertical-lr;
+            direction: rtl;
+            height: 80px;
+            width: 24px;
+            margin: 5px 0;
+        }
+        .mixer-channel .value {
+            font-size: 10px;
+            color: #999;
+        }
+        .mixer-section {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        .mixer-group {
+            border-left: 2px solid #e0e0e0;
+            padding-left: 15px;
+        }
+        .mixer-group:first-child { border-left: none; padding-left: 0; }
+        .mixer-group-title {
+            font-size: 10px;
+            color: #aaa;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
@@ -214,8 +268,12 @@
         <div class="controls">
             <button id="load-btn" class="primary">Load OTF</button>
             <input type="file" id="file-input" accept=".yaml,.yml,.json">
-            <button id="play-btn" disabled>&#9658; Play</button>
+            <button id="play-btn" disabled>&#9658; Play Track</button>
+            <button id="play-all-btn" disabled>&#9658; Play All</button>
             <button id="stop-btn" disabled>&#9632; Stop</button>
+            <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer;">
+                <input type="checkbox" id="loop-toggle"> Loop
+            </label>
             <span class="playback-position" id="playback-pos"></span>
             <div class="tempo-control">
                 <label>BPM:</label>
@@ -224,6 +282,23 @@
             <div class="view-toggle">
                 <button id="view-tab" class="active">Tab</button>
                 <button id="view-ascii">ASCII</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="mixer" class="mixer">
+        <div class="mixer-section">
+            <div class="mixer-group">
+                <div class="mixer-group-title">Volume</div>
+                <div class="mixer-channels" id="mixer-volume"></div>
+            </div>
+            <div class="mixer-group">
+                <div class="mixer-group-title">Sustain</div>
+                <div class="mixer-channels" id="mixer-sustain"></div>
+            </div>
+            <div class="mixer-group">
+                <div class="mixer-group-title">Decay (sec)</div>
+                <div class="mixer-channels" id="mixer-decay"></div>
             </div>
         </div>
     </div>
@@ -255,6 +330,95 @@
         let currentView = 'tab';
         let player = null;
         let instrumentsLoaded = false;
+        let lastPlayMode = 'track';  // 'track' or 'all' - for loop restart
+
+        // Mixer settings per track (keyed by track id)
+        const mixerSettings = {};
+        const DEFAULT_MIXER = { volume: 0.7, sustain: 1.0, decay: 1.5 };
+
+        function populateMixer() {
+            const volumeContainer = document.getElementById('mixer-volume');
+            const sustainContainer = document.getElementById('mixer-sustain');
+            const decayContainer = document.getElementById('mixer-decay');
+            volumeContainer.innerHTML = '';
+            sustainContainer.innerHTML = '';
+            decayContainer.innerHTML = '';
+
+            if (!otfData?.tracks) {
+                document.getElementById('mixer').classList.remove('visible');
+                return;
+            }
+
+            document.getElementById('mixer').classList.add('visible');
+
+            otfData.tracks.forEach(track => {
+                // Initialize settings if not present
+                if (!mixerSettings[track.id]) {
+                    // Set defaults based on instrument type
+                    const defaults = { ...DEFAULT_MIXER };
+                    if (track.instrument?.includes('bass')) {
+                        defaults.volume = 0.7;
+                        defaults.sustain = 0.8;
+                        defaults.decay = 0.5;
+                    } else if (track.instrument?.includes('banjo')) {
+                        defaults.volume = 0.8;
+                        defaults.sustain = 1.0;
+                        defaults.decay = 1.5;
+                    } else if (track.instrument?.includes('guitar')) {
+                        defaults.volume = 0.5;
+                        defaults.sustain = 1.0;
+                        defaults.decay = 1.2;
+                    }
+                    mixerSettings[track.id] = defaults;
+                }
+
+                const settings = mixerSettings[track.id];
+
+                // Volume slider
+                volumeContainer.innerHTML += `
+                    <div class="mixer-channel">
+                        <label>${track.id}</label>
+                        <input type="range" id="vol-${track.id}" min="0" max="100" value="${Math.round(settings.volume * 100)}"
+                               oninput="updateMixer('${track.id}', 'volume', this.value / 100)">
+                        <span class="value" id="vol-val-${track.id}">${Math.round(settings.volume * 100)}%</span>
+                    </div>
+                `;
+
+                // Sustain slider (multiplier 0.5 - 2.0)
+                sustainContainer.innerHTML += `
+                    <div class="mixer-channel">
+                        <label>${track.id}</label>
+                        <input type="range" id="sus-${track.id}" min="50" max="200" value="${Math.round(settings.sustain * 100)}"
+                               oninput="updateMixer('${track.id}', 'sustain', this.value / 100)">
+                        <span class="value" id="sus-val-${track.id}">${settings.sustain.toFixed(1)}x</span>
+                    </div>
+                `;
+
+                // Decay slider (0.2 - 3.0 seconds)
+                decayContainer.innerHTML += `
+                    <div class="mixer-channel">
+                        <label>${track.id}</label>
+                        <input type="range" id="dec-${track.id}" min="20" max="300" value="${Math.round(settings.decay * 100)}"
+                               oninput="updateMixer('${track.id}', 'decay', this.value / 100)">
+                        <span class="value" id="dec-val-${track.id}">${settings.decay.toFixed(1)}s</span>
+                    </div>
+                `;
+            });
+        }
+
+        function updateMixer(trackId, param, value) {
+            if (!mixerSettings[trackId]) mixerSettings[trackId] = { ...DEFAULT_MIXER };
+            mixerSettings[trackId][param] = value;
+
+            // Update display
+            if (param === 'volume') {
+                document.getElementById(`vol-val-${trackId}`).textContent = Math.round(value * 100) + '%';
+            } else if (param === 'sustain') {
+                document.getElementById(`sus-val-${trackId}`).textContent = value.toFixed(1) + 'x';
+            } else if (param === 'decay') {
+                document.getElementById(`dec-val-${trackId}`).textContent = value.toFixed(1) + 's';
+            }
+        }
 
         // WebAudioFont instrument mapping
         const INSTRUMENTS = {
@@ -967,7 +1131,9 @@
                     otfData = jsyaml.load(text);
                 }
                 renderDocument();
+                populateMixer();
                 document.getElementById('play-btn').disabled = false;
+                document.getElementById('play-all-btn').disabled = false;
                 document.getElementById('stop-btn').disabled = false;
             } catch (err) {
                 alert('Error parsing file: ' + err.message);
@@ -1076,71 +1242,204 @@
         // ============================================================
         // Audio Playback
         // ============================================================
-        document.getElementById('play-btn').addEventListener('click', startPlayback);
+        document.getElementById('play-btn').addEventListener('click', () => startPlayback(false));
+        document.getElementById('play-all-btn').addEventListener('click', () => startPlayback(true));
         document.getElementById('stop-btn').addEventListener('click', stopPlayback);
 
-        function startPlayback() {
+        async function startPlayback(playAllTracks = false) {
             if (isPlaying || !otfData) return;
 
+            lastPlayMode = playAllTracks ? 'all' : 'track';
             isPlaying = true;
             document.getElementById('play-btn').classList.add('playing');
-            document.getElementById('play-btn').textContent = '▶ Playing';
+            document.getElementById('play-all-btn').classList.add('playing');
+            const playingLabel = playAllTracks ? '▶ Playing All' : '▶ Playing';
+            document.getElementById('play-btn').textContent = playingLabel;
 
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                console.log('Created audio context');
             }
             if (audioContext.state === 'suspended') {
-                audioContext.resume();
+                await audioContext.resume();
+                console.log('Resumed audio context');
             }
+            console.log('Audio context state after resume:', audioContext.state);
 
             // Initialize WebAudioFont player
             if (!player) {
                 player = new WebAudioFontPlayer();
-                // Decode all instruments
-                Object.values(INSTRUMENTS).forEach(inst => {
-                    const data = window[inst.var];
-                    if (data) {
-                        player.adjustPreset(audioContext, data);
-                    }
-                });
+                console.log('WebAudioFont player created');
             }
 
-            const track = otfData.tracks?.find(t => t.id === currentTrack);
-            const notation = otfData.notation?.[currentTrack];
-            if (!track || !notation) return;
+            // Determine which tracks to play
+            const tracksToPlay = playAllTracks
+                ? otfData.tracks
+                : [otfData.tracks?.find(t => t.id === currentTrack)].filter(Boolean);
 
-            // Get instrument sound for this track
-            const instrumentData = getInstrumentData(track.instrument);
+            if (tracksToPlay.length === 0) {
+                console.log('No tracks to play');
+                isPlaying = false;
+                return;
+            }
 
-            // Get tuning as MIDI notes
-            const tuning = track.tuning?.map(p => PITCH_TO_MIDI[p] || 60) || [62, 59, 55, 50, 67];
+            console.log('Playing', tracksToPlay.length, 'track(s):', tracksToPlay.map(t => t.id));
+
+            // Decode all needed instruments
+            const instrumentsNeeded = new Set();
+            for (const track of tracksToPlay) {
+                const instrumentKey = getInstrumentKey(track.instrument);
+                instrumentsNeeded.add(instrumentKey);
+            }
+
+            console.log('Instruments needed:', [...instrumentsNeeded]);
+
+            // Decode each instrument
+            for (const instKey of instrumentsNeeded) {
+                const instConfig = INSTRUMENTS[instKey];
+                const instrumentData = window[instConfig.var];
+
+                if (!instrumentData) {
+                    console.error('Instrument data not loaded:', instConfig.var);
+                    continue;
+                }
+
+                console.log('Decoding', instKey, '...');
+                await new Promise((resolve) => {
+                    player.adjustPreset(audioContext, instrumentData);
+                    const checkDecoded = () => {
+                        const allDecoded = instrumentData.zones.every(zone => zone.buffer);
+                        if (allDecoded) {
+                            console.log(instKey, 'decoded');
+                            resolve();
+                        } else {
+                            setTimeout(checkDecoded, 50);
+                        }
+                    };
+                    checkDecoded();
+                });
+            }
 
             const bpm = parseInt(document.getElementById('tempo').value) || 160;
             const ticksPerBeat = otfData.timing?.ticks_per_beat || 480;
             const secondsPerTick = 60 / bpm / ticksPerBeat;
+            const ticksPerMeasure = 2 * ticksPerBeat;  // 2/2 time
 
-            // Collect all notes with absolute timing
-            // In 2/2 time, each measure has 2 beats = 960 ticks
-            const ticksPerMeasure = 2 * ticksPerBeat;
-            const notes = [];
-            notation.forEach(measure => {
-                const measureTick = (measure.measure - 1) * ticksPerMeasure;
-                measure.events?.forEach(event => {
-                    const absTick = measureTick + event.tick;
-                    event.notes.forEach(note => {
-                        const stringIdx = note.s - 1;
-                        if (stringIdx >= 0 && stringIdx < tuning.length) {
-                            const midi = tuning[stringIdx] + note.f;
-                            notes.push({
-                                time: absTick * secondsPerTick,
-                                midi: midi,
-                                duration: 0.5,
-                                measure: measure.measure
-                            });
-                        }
+            // Collect all notes from all tracks, grouped by track first
+            const notesByTrack = {};
+            for (const track of tracksToPlay) {
+                const notation = otfData.notation?.[track.id];
+                if (!notation) continue;
+
+                const tuning = track.tuning?.map(p => PITCH_TO_MIDI[p] || 60) || [62, 59, 55, 50, 67];
+                const instrumentKey = getInstrumentKey(track.instrument);
+                const instConfig = INSTRUMENTS[instrumentKey];
+                const instrumentData = window[instConfig.var];
+
+                // Get mixer settings for this track
+                const mix = mixerSettings[track.id] || DEFAULT_MIXER;
+
+                const trackNotes = [];
+                notation.forEach(measure => {
+                    const measureTick = (measure.measure - 1) * ticksPerMeasure;
+                    measure.events?.forEach(event => {
+                        const absTick = measureTick + event.tick;
+                        event.notes.forEach(note => {
+                            const stringIdx = note.s - 1;
+                            if (stringIdx >= 0 && stringIdx < tuning.length) {
+                                const midi = tuning[stringIdx] + note.f;
+                                trackNotes.push({
+                                    time: absTick * secondsPerTick,
+                                    tick: event.tick,  // Track tick within measure for boom/chuck detection
+                                    absTick: absTick,  // Absolute tick for string tracking
+                                    string: note.s,    // String number for per-string sustain
+                                    fret: note.f,
+                                    midi: midi,
+                                    measure: measure.measure,
+                                    instrumentData: instrumentData,
+                                    volume: mix.volume,
+                                    sustain: mix.sustain,
+                                    decay: mix.decay,
+                                    trackId: track.id,
+                                    instrument: track.instrument
+                                });
+                            }
+                        });
                     });
                 });
-            });
+                // Sort by time within track
+                trackNotes.sort((a, b) => a.time - b.time);
+                notesByTrack[track.id] = trackNotes;
+            }
+
+            // Calculate duration based on when the SAME STRING is next played/muted
+            // Strings ring until: (1) same string plucked again, (2) fretted, or (3) muted
+            const notes = [];
+
+            for (const trackId in notesByTrack) {
+                const trackNotes = notesByTrack[trackId];
+
+                // Group notes by string for per-string sustain calculation
+                const notesByString = {};
+                trackNotes.forEach((note, idx) => {
+                    if (!notesByString[note.string]) notesByString[note.string] = [];
+                    notesByString[note.string].push({ ...note, originalIdx: idx });
+                });
+
+                // For each string, calculate when it next gets played
+                for (const stringNum in notesByString) {
+                    const stringNotes = notesByString[stringNum];
+                    stringNotes.sort((a, b) => a.time - b.time);
+
+                    for (let i = 0; i < stringNotes.length; i++) {
+                        const note = stringNotes[i];
+                        const maxDecay = note.decay;  // From mixer
+                        let duration;
+
+                        if (i + 1 < stringNotes.length) {
+                            // Sustain until same string is played again (with small gap)
+                            const gap = stringNotes[i + 1].time - note.time;
+                            duration = gap * 0.95;  // 5% gap before next note on same string
+                        } else {
+                            // Last note on this string - use decay setting
+                            duration = maxDecay;
+                        }
+
+                        // Cap at decay setting
+                        duration = Math.min(duration, maxDecay);
+                        duration = Math.max(duration, 0.03);  // At least 30ms
+
+                        // Apply sustain multiplier from mixer
+                        duration = duration * note.sustain;
+
+                        // Instrument-specific rules (can be overridden by mixer settings)
+                        if (note.instrument?.includes('bass')) {
+                            // Bass mutes on off-beat in bluegrass
+                            const isOnBeat = (note.tick % 480) === 0;
+                            if (isOnBeat) {
+                                const ticksToOffBeat = 240;  // Half a beat
+                                const timeToMute = ticksToOffBeat * secondsPerTick;
+                                duration = Math.min(duration, timeToMute * 0.9 * note.sustain);
+                            } else {
+                                // Off-beat bass notes are short staccato
+                                duration = Math.min(duration, 0.1 * note.sustain);
+                            }
+                        } else if (note.instrument?.includes('guitar')) {
+                            // Guitar boom-chuck
+                            const isOnBeat = (note.tick % 480) === 0;
+                            if (isOnBeat) {
+                                // Boom - bass note, slightly shorter
+                                duration = duration * 0.8;
+                            }
+                            // Chuck naturally rings until next strum
+                        }
+                        // Banjo just uses the per-string sustain (rings until replayed)
+
+                        note.duration = duration;
+                        notes.push(note);
+                    }
+                }
+            }
 
             // Sort by time
             notes.sort((a, b) => a.time - b.time);
@@ -1149,21 +1448,27 @@
             playbackStartTime = audioContext.currentTime + 0.1;
             scheduledNodes = [];
 
-            notes.forEach(note => {
+            console.log('Scheduling', notes.length, 'notes from', tracksToPlay.length, 'track(s)');
+
+            notes.forEach((note, i) => {
                 const startTime = playbackStartTime + note.time;
-                if (instrumentData) {
+                try {
                     const envelope = player.queueWaveTable(
                         audioContext,
                         audioContext.destination,
-                        instrumentData,
+                        note.instrumentData,
                         startTime,
                         note.midi,
                         note.duration,
-                        0.7  // volume
+                        note.volume
                     );
                     scheduledNodes.push(envelope);
+                } catch (e) {
+                    console.error('Error scheduling note:', e);
                 }
             });
+
+            console.log('Total scheduled:', scheduledNodes.length);
 
             // Update position display
             const totalDuration = notes.length > 0 ? notes[notes.length - 1].time + 1 : 0;
@@ -1176,7 +1481,20 @@
                 if (elapsed < totalDuration) {
                     animationFrame = requestAnimationFrame(updateLoop);
                 } else {
-                    stopPlayback();
+                    // Check if loop is enabled
+                    if (document.getElementById('loop-toggle').checked) {
+                        // Stop current playback and restart
+                        stopPlayback();
+                        setTimeout(() => {
+                            if (lastPlayMode === 'all') {
+                                document.getElementById('play-all-btn').click();
+                            } else {
+                                document.getElementById('play-btn').click();
+                            }
+                        }, 100);
+                    } else {
+                        stopPlayback();
+                    }
                 }
             }
             animationFrame = requestAnimationFrame(updateLoop);
@@ -1196,7 +1514,8 @@
         function stopPlayback() {
             isPlaying = false;
             document.getElementById('play-btn').classList.remove('playing');
-            document.getElementById('play-btn').textContent = '▶ Play';
+            document.getElementById('play-all-btn').classList.remove('playing');
+            document.getElementById('play-btn').textContent = '▶ Play Track';
 
             if (animationFrame) {
                 cancelAnimationFrame(animationFrame);
@@ -1256,7 +1575,9 @@
                     otfData = jsyaml.load(text);
                 }
                 renderDocument();
+                populateMixer();
                 document.getElementById('play-btn').disabled = false;
+                document.getElementById('play-all-btn').disabled = false;
                 document.getElementById('stop-btn').disabled = false;
             } catch (err) {
                 alert('Error parsing file: ' + err.message);
