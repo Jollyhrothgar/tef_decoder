@@ -186,6 +186,160 @@ for page in doc: print(page.get_text())
 "
 ```
 
+## TuxGuitar Reference Implementation (Dec 2025)
+
+**MAJOR DISCOVERY**: TuxGuitar (https://github.com/tuxguitar) has a complete TEF3 parser!
+Located at: `/tuxguitar/desktop/TuxGuitar-tef/src/app/tuxguitar/io/tef3/`
+
+### TuxGuitar File Structure Order
+
+Files are read sequentially in this exact order:
+
+```
+1. Header              (256 bytes, fixed)
+2. Song metadata       (title, author, comments, notes, url, copyright, lyrics, text events)
+3. Chord definitions   (if hasChords flag set in header)
+4. Measures            (2-byte size + 2-byte count + fixed-size records)
+5. Tracks              (instrument definitions with tuning)
+6. Print metadata      (page headers/footers)
+7. Reading list        (if hasReadingList flag at header offset 128)
+8. Components          (12-byte records until 0xFFFFFFFF footer)
+```
+
+### TuxGuitar Header Format (256 bytes)
+
+Key offsets from TEInputStream.java:
+
+| Offset | Size | Field | Expected Value |
+|--------|------|-------|----------------|
+| 3 | 1 | majorVersion | 3 (for TEF v3.x) |
+| 6-7 | 2 | initialBpm | tempo |
+| 56-59 | 4 | "tbed" | 0x74, 0x62, 0x65, 0x64 |
+| 84-87 | 4 | posOfTextEvents | non-zero = has text events |
+| 88-91 | 4 | posOfChords | non-zero = has chords |
+| 128-131 | 4 | posOfReadingList | non-zero = has reading list |
+| 140-143 | 4 | posOfCopyright | non-zero = has copyright |
+| 202-203 | 2 | wOldNum | 4 |
+| 204 | 1 | wFormatLo | 4 |
+| 205 | 1 | wFormatHi | 10 |
+
+**Note**: TuxGuitar checks for "tbed" at offset 56, not "debt" - we had the marker backwards!
+
+### TuxGuitar Reading List Format
+
+```java
+// From TEInputStream.java lines 505-525
+int sizeOfReadingListEntry = readShort();  // 2 bytes
+int totalReadingListEntries = readShort(); // 2 bytes
+
+for each entry:
+    int startMeasure = readShort();  // 2 bytes, NOT 1 byte!
+    int endMeasure = readShort();    // 2 bytes, NOT 1 byte!
+    String name = readNullTerminatedString(sizeOfEntry - 5);
+```
+
+**Key difference from our parser**: Measures are 2-byte shorts, not single bytes!
+
+### TuxGuitar Component Format (12 bytes each)
+
+From TEInputStream.java line 527+:
+
+```
+Bytes 0-3:  location (4-byte int, little-endian)
+Byte 4:     componentType
+Bytes 5-11: type-specific data
+```
+
+#### Component Types (byte 4):
+
+| Type | Meaning |
+|------|---------|
+| 0x01-0x19 | Note (fret = (type & 0x1f) - 1) |
+| 0x33 | Rest |
+| 0x35 | Chord |
+| 0x36 | Line break |
+| 0x37 | Accent |
+| 0x38 | Crescendo |
+| 0x39 | Text event |
+| 0x3D | Connection |
+| 0x75 | Scale diagram |
+| 0x78 | Drum change |
+| 0x7D | Spacing marker OR grace note metadata |
+| 0x7E | Voice change |
+| 0xB6 | Symbol |
+| 0xB7 | Ending |
+| 0xBD | Beam break |
+| 0xBE | Stem length |
+| 0xFD | Syncopation |
+| 0xFE | Tempo change |
+
+### TuxGuitar Position Encoding
+
+From TEPosition.java - the 4-byte location encodes multiple values:
+
+```java
+int valuePerString = 8;
+int valuePerPositionPerString = 32;
+int valuePerPosition = 32 * totalStringCount;  // varies by file!
+int maxPositionsInFourFour = 16;  // 16th note grid
+
+// Decode location to (measure, positionInMeasure, string, track):
+for each measure:
+    timeSignatureRatio = numerator / denominator
+    maxPositionsInMeasure = 16 * timeSignatureRatio
+    valueForMeasure = valuePerPosition * maxPositionsInMeasure
+
+    if (location <= valueForMeasure):
+        positionInMeasure = location / valuePerPosition
+        stringOfComponent = (location % valuePerPosition) / valuePerString
+        break
+    else:
+        location -= valueForMeasure
+        measureOfComponent++
+```
+
+### TuxGuitar Note Component (types 0x01-0x19)
+
+From TEInputStream.java lines 632-680:
+
+```
+Byte 4 (type):
+  - bits 0-4: fret + 1 (so 0x01 = fret 0, 0x19 = fret 24)
+  - bit 6: isGraceNote
+  - bit 7: isPitchShifted
+
+Byte 5: bits 0-4 = duration, bits 5-7 = dynamics
+Byte 6: bits 0-3 = effect1, bits 4-5 = voice, bits 6-7 = alterations
+Byte 7: bits 0-2 = pitchShift, bits 5-7 = graceNoteEffect
+Byte 8: bits 0-3 = effect2, bits 4-7 = effect3
+Byte 9: bits 0-3 = fontPreset, bit 4 = stabilo
+Byte 10: bits 0-4 = fingering, bits 5-7 = stroke
+Byte 11: attribute flags
+```
+
+### TuxGuitar Tuning Formula (confirmed!)
+
+From TESongParser.java line 135:
+```java
+string.setValue(96 - tuning[stringIdx]);
+```
+
+This matches our discovered formula: `MIDI_pitch = 96 - tuning_byte`
+
+### Implications for Our Parser
+
+Our current parser has fundamental differences from TuxGuitar's:
+
+1. **File navigation**: We search for "debt" marker; TuxGuitar reads sequentially
+2. **Component format**: We expected marker at byte 11; TuxGuitar has type at byte 4
+3. **Position encoding**: We used bytes 6-7; TuxGuitar uses 4-byte location at bytes 0-3
+4. **Fret encoding**: We used byte 10; TuxGuitar encodes fret in component type bits 0-4
+5. **Reading list**: We parsed 1-byte measures; TuxGuitar uses 2-byte shorts
+
+This suggests our parser accidentally works for some files but isn't following the actual format.
+
+---
+
 ## TEF File Format (Initial Analysis)
 
 ### Header Structure (offset 0x00)
@@ -264,6 +418,36 @@ Offset  Size  Field           Values/Notes
 | 1     | Hammer-on  | Left-hand note attack (ascending) |
 | 2     | Pull-off   | Left-hand note attack (descending) |
 | 3     | Slide      | Glide between frets |
+
+**Full Effect Encoding (TuxGuitar-verified):**
+
+From TEComponentNote.java - effects are encoded in component bytes 6 and 8:
+
+| Effect1 (byte 6 bits 0-3) | Value | Description |
+|---------------------------|-------|-------------|
+| HammerOn | 1 | Hammer-on |
+| PullOff | 2 | Pull-off |
+| Slide | 3 | Slide between frets |
+| Choke | 4 | String choke/mute |
+| Brush | 5 | Brush stroke |
+| NaturalHarmonic | 6 | Natural harmonic |
+| ArtificialHarmonic | 7 | Artificial harmonic |
+| PalmMute | 8 | Palm mute |
+| Tap | 9 | Tap technique |
+| Vibrato | 10 | Vibrato |
+| Tremolo | 11 | Tremolo picking |
+| Bend | 12 | Bend |
+| BendRelease | 13 | Bend and release |
+| Roll | 14 | Roll |
+| DeadNote | 15 | Dead/muted note |
+
+| Effect2 (byte 8 bits 0-3) | Value | Description |
+|---------------------------|-------|-------------|
+| LetRing | 1 | Let ring |
+| Slap | 2 | Slap technique |
+| GhostNote | 4 | Ghost note |
+| Staccato | 7 | Staccato |
+| FadeIn | 8 | Fade in |
 
 **Example from sample file:**
 ```
@@ -388,8 +572,10 @@ string = string_val // 8 + 1   # Maps 0,8,16,24,32 → strings 1-5
 | I | 0x49 | Initial - first struck note |
 | F | 0x46 | Fret - additional picked notes |
 | L | 0x4c | Legato - slurs, hammer-ons, pull-offs |
-| C | 0x43 | Chord/Continue marker |
+| C | 0x43 | Chord/Continue marker (valid melody note when decodable) |
 | @ | 0x40 | Special marker (often bass/thumb notes) |
+| A | 0x41 | Articulation marker (valid melody note) |
+| & | 0x26 | Another articulation marker (valid melody note) |
 | S | 0x00 | Section/special boundary |
 
 **Voice Filtering (byte 8):**
@@ -426,6 +612,63 @@ are **rendered arrangements** with repeats unfolded.
 **Implication**: TEF parser extracts correct source material. Differences from MIDI
 are due to arrangement choices (which sections/repeats TablEdit included in export).
 
+### Reading List (MIDI Playback Order)
+
+**Discovery**: TEF files store a "Reading List" that controls MIDI playback order.
+This is the mechanism for repeat expansion and D.S./D.C. handling.
+
+**Location**: Header offset 128 contains a 4-byte pointer to reading list.
+If zero, file has no reading list.
+
+**Structure (TuxGuitar-verified):**
+```
+Reading list header:
+  2 bytes: entry_size (typically 32)
+  2 bytes: entry_count
+
+Per entry (entry_size bytes each):
+  2 bytes: start_measure (little-endian short, 1-indexed)
+  2 bytes: end_measure (little-endian short, 1-indexed, inclusive)
+  N bytes: name (null-terminated) + padding
+```
+
+**Example (angeline_the_baker):**
+```
+[01] measures 1-8    # A part first time
+[02] measures 1-7    # A part repeat (first ending)
+[03] measures 9-17   # B part
+[04] measures 10-16  # B part variation
+[05] measures 18-18  # Ending
+```
+
+**Expansion calculation:**
+- 8 + 7 + 9 + 7 + 1 = 32 total measures in playback order
+- Maps TEF's ~46 beats of source material → MIDI's ~127 beats rendered
+
+**MIDI Export Process:**
+1. Parse notes from TEF file (filtered by marker and b8=0)
+2. Assign each note to its source measure: `measure = (position // TICKS_PER_MEASURE) + 1`
+3. For each reading list entry, output notes from that measure range
+4. Calculate output position: cumulative_offset + relative_position
+
+**Measure Timing:**
+| Resolution | Ticks per beat | Ticks per measure (4/4) |
+|------------|----------------|------------------------|
+| High (angeline) | 1408 | 5632 |
+| Medium (shuck) | 960 | 3840 |
+| Low (Multi Note) | 320 | 1280 |
+
+**Test Results (with reading list expansion):**
+| File | Source Notes | Expanded | Original MIDI | Match Rate |
+|------|-------------|----------|---------------|------------|
+| Multi Note | 36 | 36 (no list) | 36 | **100%** |
+| angeline_banjo_only (no RL) | 104 | 104 | 104 | **100%** |
+| angeline_banjo_only (with RL) | 104 | 196 | 188 | ~96% (RL mismatch) |
+
+Note: The "with RL" file has an inconsistent reading list - it references measures 9-18
+but the banjo-only file only contains notes in measures 1-8. The reading list wasn't
+updated when guitar was removed from the original file.
+
 **Decoding formula:**
 ```python
 # Find notes using debt header
@@ -447,7 +690,8 @@ pitch = tuning[string - 1] + fret
 | File | TEF Notes | MIDI Notes | Match Rate | Notes |
 |------|-----------|------------|------------|-------|
 | Multi Note.tef | 36 | 36 | 100% pitch | All pitches match |
-| angeline_the_baker | 67 | 188 | 46/67 exact | TEF stores source, MIDI has repeats |
+| angeline_banjo_only (no RL) | 104 | 104 | **100%** | Perfect match with A, &, C markers |
+| angeline_the_baker | 67 | 188 | 65% | TEF stores source, MIDI has repeats |
 | shuck_the_corn.tef | ~50 | varies | High | Correct pitches for first section |
 
 **Timing Scale:**

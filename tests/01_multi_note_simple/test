@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Test runner for 01_multi_note_simple
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+cd "$REPO_ROOT"
+
+echo "=== Test 01: Multi Note Simple ==="
+echo
+
+# Run parser
+uv run python3 scripts/lib/export_midi.py \
+    "$SCRIPT_DIR/truth/input.tef" \
+    "$SCRIPT_DIR/parsed/output.mid"
+
+echo
+
+# Compare results
+uv run python3 -c "
+from mido import MidiFile
+
+expected = MidiFile('$SCRIPT_DIR/truth/expected.mid')
+actual = MidiFile('$SCRIPT_DIR/parsed/output.mid')
+
+exp_notes = [msg.note for track in expected.tracks for msg in track if msg.type == 'note_on' and msg.velocity > 0]
+act_notes = [msg.note for track in actual.tracks for msg in track if msg.type == 'note_on' and msg.velocity > 0]
+
+matches = sum(1 for a, b in zip(exp_notes, act_notes) if a == b)
+total = min(len(exp_notes), len(act_notes))
+
+print(f'Expected: {len(exp_notes)} notes')
+print(f'Actual:   {len(act_notes)} notes')
+print(f'Matches:  {matches}/{total} ({100*matches/total:.0f}%)')
+print()
+
+if len(exp_notes) == len(act_notes) == matches:
+    print('PASS')
+    exit(0)
+else:
+    print('FAIL')
+    # Show first 5 mismatches
+    print()
+    print('First mismatches:')
+    shown = 0
+    for i, (e, a) in enumerate(zip(exp_notes, act_notes)):
+        if e != a:
+            print(f'  [{i}] expected {e}, got {a}')
+            shown += 1
+            if shown >= 5:
+                break
+    exit(1)
+"

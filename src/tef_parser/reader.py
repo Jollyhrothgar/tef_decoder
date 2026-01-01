@@ -5,17 +5,51 @@ from pathlib import Path
 import struct
 
 
+class TEFVersionError(Exception):
+    """Raised when a TEF file version is not supported."""
+
+    def __init__(self, version: str, message: str = None):
+        self.version = version
+        if message is None:
+            message = f"TEF version {version} is not supported. This parser only supports version 3.x files."
+        super().__init__(message)
+
+
 @dataclass
 class TEFHeader:
     """TEF file header information."""
-    format_id: int          # Bytes 0-1: format identifier (0x0010)
-    version_major: int      # Byte 3: major version
+    format_id: int          # Bytes 0-1: format identifier (0x0010 for v3, 0 for v2)
+    version_major: int      # Byte 3: major version (3 for v3, 2 for v2)
     version_minor: int      # Byte 2: minor version
     raw_header: bytes       # First 64 bytes for analysis
+    # V2-specific fields (populated only for v2 files)
+    v2_title: str = ""
+    v2_composer: str = ""
+    v2_comments: str = ""
+    v2_header_end: int = 0  # Offset where v2 header ends and data begins
+    v2_measures: int = 0    # Number of measures
+    v2_time_num: int = 4    # Time signature numerator
+    v2_time_denom: int = 4  # Time signature denominator
+    v2_tempo: int = 120     # Tempo in BPM
+    v2_strings: int = 4     # Total number of strings
+    v2_tracks: int = 1      # Number of tracks
+    v2_component_offset: int = 0  # Offset to component data
+    v2_component_count: int = 0   # Number of components
 
     @property
     def version(self) -> str:
         return f"{self.version_major}.{self.version_minor:02d}"
+
+    @property
+    def is_v2(self) -> bool:
+        return self.version_major == 2
+
+    @property
+    def v2_ts_size(self) -> int:
+        """Time slice size for v2 position calculations."""
+        if self.v2_time_denom == 0:
+            return 256
+        return (256 * self.v2_time_num) // self.v2_time_denom
 
 
 @dataclass
@@ -48,6 +82,24 @@ class TEFSection:
     """Section marker (e.g., "A Part", "B Part")."""
     name: str
     offset: int
+
+
+@dataclass
+class TEFReadingListEntry:
+    """Reading list entry for MIDI playback order.
+
+    The reading list defines which measure ranges to play and in what order.
+    This allows TEF to store sections once but play them multiple times
+    (like repeats in music notation).
+
+    Structure at offset 0x4a0, 32-byte records:
+    - Byte 1: from_measure (1-indexed)
+    - Byte 3: to_measure (1-indexed)
+    """
+    index: int           # Entry number (1-indexed)
+    from_measure: int    # Start measure (1-indexed)
+    to_measure: int      # End measure (1-indexed, inclusive)
+    offset: int          # File offset where entry was found
 
 
 @dataclass
@@ -99,50 +151,34 @@ class TEFNoteEvent:
 
     @property
     def is_melody(self) -> bool:
-        """True if this is a melody note (can decode string/fret)."""
-        # Unified format: check if byte 10 (fret + 1) is valid
-        if len(self.raw_data) >= 12 and self.raw_data[10] > 0:
-            # Verify string encoding is valid (bits 3-5 of byte 6)
-            b6 = self.raw_data[6]
-            string_val = b6 & 0x38  # Bits 3-5 only
-            if string_val in (0, 8, 16, 24, 32):
-                return True
-        return False
+        """True if this is a melody note that should be exported.
+
+        With TuxGuitar format, notes are identified by component type.
+        String is stored in self.extra (1-indexed).
+        Fret is stored in self.pitch_byte.
+
+        Note: We include ALL note types (I, F, L) in melody export.
+        The L (Legato) notes that shouldn't be separate MIDI events
+        have specific byte patterns that need further analysis.
+        """
+        # Check if extra (string) and pitch_byte (fret) are valid
+        return 1 <= self.extra <= 15 and 0 <= self.pitch_byte <= 24
 
     def decode_string_fret(self) -> tuple[int, int] | None:
         """Decode string and fret from note record.
 
-        Returns (string, fret) tuple where string is 1-5 and fret is 0+.
+        Returns (string, fret) tuple where string is 1-indexed and fret is 0+.
         Returns None if decoding fails.
 
-        Unified format (all TEF files):
-        - Byte 6: Position low byte with string encoded in bits 3-5
-          (values 0, 8, 16, 24, 32 map to strings 1-5)
-          Bits 6-7 are position high bits, not string data
-        - Byte 10: Fret + 1
-        - Byte 11: Marker (I, F, L)
+        With TuxGuitar format:
+        - self.extra contains local string (1-indexed within track)
+        - self.pitch_byte contains fret (0-indexed)
         """
-        if len(self.raw_data) < 12:
+        # Validate string and fret ranges
+        if not (1 <= self.extra <= 15) or not (0 <= self.pitch_byte <= 24):
             return None
 
-        # String from byte 6, bits 3-5 only (0x38 mask)
-        b6 = self.raw_data[6]
-        string_val = b6 & 0x38  # Bits 3-5 only
-
-        # Valid string encodings: 0, 8, 16, 24, 32 -> strings 1-5
-        if string_val not in (0, 8, 16, 24, 32):
-            return None
-
-        string = string_val // 8 + 1
-
-        # Fret from byte 10 (value - 1)
-        fret = self.raw_data[10] - 1
-
-        # Validate ranges
-        if not (1 <= string <= 5) or fret < 0 or fret > 24:
-            return None
-
-        return (string, fret)
+        return (self.extra, self.pitch_byte)
 
     def get_pitch(self, tuning: list[int] | None = None) -> int | None:
         """Calculate MIDI pitch from string/fret.
@@ -176,6 +212,7 @@ class TEFFile:
     chords: list[TEFChord] = field(default_factory=list)
     sections: list[TEFSection] = field(default_factory=list)
     note_events: list[TEFNoteEvent] = field(default_factory=list)
+    reading_list: list[TEFReadingListEntry] = field(default_factory=list)
 
     def dump(self) -> str:
         """Return a human-readable dump of the file contents."""
@@ -201,6 +238,12 @@ class TEFFile:
             lines.append("Chords:")
             chord_names = [c.name for c in self.chords]
             lines.append(f"  {', '.join(chord_names)}")
+
+        if self.reading_list:
+            lines.append("")
+            lines.append("Reading List (MIDI playback order):")
+            for entry in self.reading_list:
+                lines.append(f"  [{entry.index:02d}] measures {entry.from_measure}-{entry.to_measure}")
 
         if self.note_events:
             lines.append("")
@@ -251,8 +294,21 @@ class TEFReader:
         self.pos = 0
 
     def read_header(self) -> TEFHeader:
-        """Parse the TEF header."""
+        """Parse the TEF header.
+
+        V3 files start with binary header: format_id (0x0010), version bytes.
+        V2 files start with plain ASCII text (title, composer, etc.).
+        """
         raw = self.data[:64]
+
+        # Detect v2 files: they start with printable ASCII text, not binary header
+        # V3 format_id is 0x0010 (16) - first two bytes should be 0x10 0x00
+        first_two = raw[0:2]
+        if first_two[0] >= 0x20 and first_two[0] < 0x7F:
+            # First byte is printable ASCII - this is a v2 file
+            # Parse null-terminated strings at the start
+            return self._read_v2_header()
+
         format_id = struct.unpack("<H", raw[0:2])[0]
         version_minor = raw[2]
         version_major = raw[3]
@@ -262,6 +318,80 @@ class TEFReader:
             version_major=version_major,
             version_minor=version_minor,
             raw_header=raw,
+        )
+
+    def _read_v2_header(self) -> TEFHeader:
+        """Parse V2 file header following TuxGuitar format.
+
+        V2 header structure:
+        - Bytes 0-199: Info section (null-terminated strings: title, composer, comments)
+        - Byte 200-201: measures count (little-endian short)
+        - Byte 202: time signature numerator
+        - Byte 203: skip
+        - Byte 204: time signature denominator
+        - Bytes 205-219: skip(15)
+        - Bytes 220-221: tempo (little-endian short)
+        - Byte 222: repeats count
+        - Bytes 223-227: skip(5)
+        - Byte 228: texts count
+        - Bytes 229-233: skip(5)
+        - Byte 234: percussions count
+        - Byte 235: rhythms count
+        - Byte 236: chords count
+        - Byte 237: skip(1)
+        - Byte 238: notes flag
+        - Byte 239: skip(1)
+        - Byte 240: strings count (total across all tracks)
+        - Byte 241: tracks count (add 1 to get actual count)
+        - Bytes 242-255: skip(14)
+        - Byte 256-257: component count (little-endian short)
+        - Byte 258+: components (6 bytes each)
+        """
+        # Parse info section (first 200 bytes contain null-terminated strings)
+        info = self.data[0:200]
+        strings = []
+        pos = 0
+        for _ in range(3):  # title, composer, comments
+            end = info.find(b'\x00', pos)
+            if end < 0:
+                break
+            s = info[pos:end].decode('latin-1', errors='replace')
+            strings.append(s)
+            pos = end + 1
+
+        title = strings[0] if len(strings) > 0 else ""
+        composer = strings[1] if len(strings) > 1 else ""
+        comments = strings[2] if len(strings) > 2 else ""
+
+        # Parse structured header fields (starting at offset 200)
+        measures = struct.unpack('<H', self.data[200:202])[0]
+        time_num = self.data[202]
+        time_denom = self.data[204]
+        tempo = struct.unpack('<H', self.data[220:222])[0]
+        num_strings = self.data[240]
+        num_tracks = self.data[241] + 1
+
+        # Component count at offset 256
+        component_count = struct.unpack('<H', self.data[256:258])[0]
+        component_offset = 258  # Components start right after count
+
+        return TEFHeader(
+            format_id=0,
+            version_major=2,
+            version_minor=0,
+            raw_header=self.data[:64],
+            v2_title=title,
+            v2_composer=composer,
+            v2_comments=comments,
+            v2_header_end=258,  # Components start at 258
+            v2_measures=measures,
+            v2_time_num=time_num,
+            v2_time_denom=time_denom,
+            v2_tempo=tempo,
+            v2_strings=num_strings,
+            v2_tracks=num_tracks,
+            v2_component_offset=component_offset,
+            v2_component_count=component_count,
         )
 
     def find_strings(self) -> list[TEFString]:
@@ -302,77 +432,155 @@ class TEFReader:
     def parse_instruments(self) -> list[TEFInstrument]:
         """Parse instrument definitions from the file.
 
-        Instrument records appear in a specific region (~0x2f0-0x3c0) with structure:
-        - [record_header][tuning_bytes][velocity_bytes][instrument_name]
-        - Tuning bytes are distinct values; velocity bytes are all the same value
+        Instrument records in TEF v3 follow a structured format:
+        - Instrument name (null-terminated string)
+        - Tuning name (null-terminated string, e.g., "GDAE", "Standard")
+        - These appear AFTER tuning byte data in the structured section
+
+        To distinguish real instruments from text mentions, we require:
+        1. Instrument name followed by null byte
+        2. Then a valid tuning name (short, no spaces)
         """
         instruments = []
 
-        # Instrument names with expected string counts (case-insensitive search)
-        instrument_info = [
-            ("banjo open g", 5),
-            ("guitar", 6),
-            ("bass", 4),
+        # Known instrument patterns with typical string counts
+        # Format: (name_pattern, default_strings)
+        # Include both capitalized and lowercase versions
+        instrument_patterns = [
+            (b"Mandolin", 4),
+            (b"mandolin", 4),
+            (b"Banjo open G", 5),
+            (b"banjo open G", 5),
+            (b"Banjo", 5),
+            (b"banjo", 5),
+            (b"Guitar Standard", 6),
+            (b"guitar standard", 6),
+            (b"Guitar", 6),
+            (b"guitar", 6),
+            (b"Bass", 4),
+            (b"bass", 4),
+            (b"Ukulele", 4),
+            (b"ukulele", 4),
         ]
 
-        for name_pattern, expected_strings in instrument_info:
-            # Case-insensitive search
-            data_lower = self.data.lower()
-            idx = data_lower.find(name_pattern.encode('ascii'))
-            if idx < 0:
-                continue
+        found_offsets = set()  # Avoid duplicates
 
-            # Get actual name from original data
-            name = self.data[idx:idx + len(name_pattern)].decode('ascii', errors='ignore')
+        for name_pattern, default_strings in instrument_patterns:
+            # Search for all occurrences
+            idx = 0
+            while True:
+                idx = self.data.find(name_pattern, idx)
+                if idx < 0:
+                    break
 
-            # The bytes before the name are: [tuning * n][velocity * n] or just [tuning * n][nulls]
-            # We need to skip velocity/padding and find tuning
-            # Tuning is at offset: idx - n - n (for velocity) or idx - n - nulls
+                # Skip if too close to a previously found instrument
+                if any(abs(idx - off) < 50 for off in found_offsets):
+                    idx += 1
+                    continue
 
-            # Look back from the name to find the tuning bytes
-            # Pattern: tuning bytes are varied, velocity bytes are uniform
-            pos = idx - 1
+                # Verify this is a real instrument record:
+                # 1. Must be followed by null byte
+                name_end = idx + len(name_pattern)
+                if name_end >= len(self.data) or self.data[name_end] != 0:
+                    idx += 1
+                    continue
 
-            # Skip nulls
-            while pos > 0 and self.data[pos] == 0:
-                pos -= 1
+                # 2. Should be followed by either:
+                #    - A tuning name (short string, no spaces) then null
+                #    - Just nulls (no tuning name stored)
+                tuning_name_start = name_end + 1
+                tuning_name_end = tuning_name_start
+                while tuning_name_end < len(self.data) and tuning_name_end < tuning_name_start + 20:
+                    if self.data[tuning_name_end] == 0:
+                        break
+                    tuning_name_end += 1
 
-            # Check if we have uniform bytes (velocity field) - skip all of them
-            if pos >= expected_strings - 1:
-                uniform_val = self.data[pos]
-                if uniform_val != 0:  # Not null padding
-                    uniform_count = 0
-                    check_pos = pos
-                    while check_pos > 0 and self.data[check_pos] == uniform_val:
-                        uniform_count += 1
-                        check_pos -= 1
+                tuning_name = ""
+                if tuning_name_end > tuning_name_start:
+                    tuning_name_bytes = self.data[tuning_name_start:tuning_name_end]
+                    # Tuning name should be short, printable (e.g., "GDAE", "Standard", "r Standard")
+                    try:
+                        tuning_name = tuning_name_bytes.decode('ascii')
+                        # Tuning names can have spaces (e.g., "r Standard") but shouldn't be too long
+                        # or contain sentence-like text (more than 2 spaces = probably not a tuning name)
+                        if len(tuning_name) > 20 or tuning_name.count(' ') > 2:
+                            idx += 1
+                            continue
+                    except UnicodeDecodeError:
+                        idx += 1
+                        continue
+                # If no tuning name (just nulls), that's OK - some files don't have them
 
-                    if uniform_count >= 4:  # At least 4 uniform bytes = velocity field
-                        pos -= uniform_count
+                # Get the actual instrument name
+                name = name_pattern.decode('ascii')
 
-            # Skip any isolated bytes and nulls before tuning
-            while pos > 0 and (self.data[pos] == 0 or pos > 0 and self.data[pos - 1] == 0):
-                pos -= 1
+                # Now find the tuning bytes by looking backwards
+                # The format has tuning bytes (one per string) before the name
+                # First, look for the num_strings indicator
 
-            # Now extract tuning bytes and convert to MIDI pitches
-            # Formula: MIDI_pitch = 96 - tuning_byte (verified with Open G banjo)
-            tuning_end = pos + 1
-            tuning_start = tuning_end - expected_strings
-            if tuning_start >= 0:
-                tuning_bytes = list(self.data[tuning_start:tuning_end])
-                # Convert raw bytes to MIDI pitches: pitch = 96 - byte
-                tuning_pitches = [96 - b for b in tuning_bytes]
-            else:
-                tuning_bytes = []
+                # Look back to find tuning bytes
+                # Tuning bytes are typically in range 0x14-0x60 (valid MIDI: 96-byte = 36-82)
+                pos = idx - 1
+
+                # Skip nulls and padding
+                while pos > 0 and self.data[pos] == 0:
+                    pos -= 1
+
+                # Skip uniform bytes (velocity field - typically 6 bytes all same value)
+                if pos >= 3:
+                    uniform_val = self.data[pos]
+                    if 0 < uniform_val < 128:
+                        uniform_count = 0
+                        check_pos = pos
+                        while check_pos > 0 and self.data[check_pos] == uniform_val:
+                            uniform_count += 1
+                            check_pos -= 1
+                        if uniform_count >= 4:
+                            pos -= uniform_count
+
+                # After velocity, check if there's a null separator before tuning
+                # Pattern 1: [tuning bytes][velocity bytes] - no separator
+                # Pattern 2: [tuning bytes][null][extra bytes][velocity bytes] - has separator
+                #
+                # Look for null within a small window; if found, tuning is before it
+                num_strings = default_strings
                 tuning_pitches = []
 
-            instruments.append(TEFInstrument(
-                name=name,
-                tuning_name="",
-                num_strings=expected_strings,
-                tuning_pitches=tuning_pitches,
-                offset=idx,
-            ))
+                # Check if there's a null within next few bytes (separator pattern)
+                null_pos = -1
+                for check in range(pos, max(pos - 3, 0), -1):
+                    if self.data[check] == 0:
+                        null_pos = check
+                        break
+
+                if null_pos >= 0:
+                    # Found null separator - tuning is immediately before it
+                    tuning_end = null_pos
+                else:
+                    # No separator - tuning ends at current position
+                    tuning_end = pos + 1
+
+                tuning_start = tuning_end - num_strings
+
+                if tuning_start >= 0:
+                    tuning_bytes = list(self.data[tuning_start:tuning_end])
+                    # Validate tuning bytes are in reasonable range (MIDI 36-82)
+                    valid = all(0x10 <= b <= 0x60 for b in tuning_bytes)
+                    if valid:
+                        tuning_pitches = [96 - b for b in tuning_bytes]
+
+                found_offsets.add(idx)
+                instruments.append(TEFInstrument(
+                    name=name,
+                    tuning_name=tuning_name,
+                    num_strings=num_strings,
+                    tuning_pitches=tuning_pitches,
+                    offset=idx,
+                ))
+                idx += 1
+
+        # Sort by offset to maintain order
+        instruments.sort(key=lambda x: x.offset)
 
         return instruments
 
@@ -410,35 +618,109 @@ class TEFReader:
 
         return sections
 
-    def find_debt_offset(self) -> int:
-        """Find the note region start using the 'debt' header marker.
+    def find_reading_list_offset(self) -> int:
+        """Find the reading list offset from header.
 
-        The 'debt' marker is followed by a 4-byte offset value. Notes typically
-        start at (debt_value - 6), but some files have notes at (debt_value + 6).
+        TuxGuitar format: Header offset 128 contains a 4-byte pointer to
+        the reading list. If zero, file has no reading list.
 
-        Returns the note region start offset, or -1 if not found.
+        Returns the offset where reading list data starts, or -1 if none.
+        """
+        if len(self.data) < 132:
+            return -1
+
+        # Read 4-byte little-endian offset from header position 128
+        pos_of_reading_list = struct.unpack('<I', self.data[128:132])[0]
+
+        if pos_of_reading_list == 0:
+            return -1  # No reading list
+
+        if pos_of_reading_list >= len(self.data):
+            return -1  # Invalid offset
+
+        return pos_of_reading_list
+
+    def parse_reading_list(self) -> list[TEFReadingListEntry]:
+        """Parse the reading list for MIDI playback order.
+
+        TuxGuitar format (from TEInputStream.java):
+        - 2 bytes: entry size (typically 32)
+        - 2 bytes: entry count
+        - For each entry:
+          - 2 bytes: start measure (little-endian short)
+          - 2 bytes: end measure (little-endian short)
+          - (entry_size - 4) bytes: name + padding
+
+        The reading list tells MIDI playback which measure ranges to play and
+        in what order, effectively "unfolding" repeats and D.S. sections.
+        """
+        entries = []
+
+        reading_list_offset = self.find_reading_list_offset()
+        if reading_list_offset < 0:
+            return entries
+
+        # Read header: 2-byte entry size + 2-byte count
+        if reading_list_offset + 4 > len(self.data):
+            return entries
+
+        entry_size = struct.unpack('<H', self.data[reading_list_offset:reading_list_offset + 2])[0]
+        entry_count = struct.unpack('<H', self.data[reading_list_offset + 2:reading_list_offset + 4])[0]
+
+        # Sanity checks
+        if entry_size < 4 or entry_size > 256 or entry_count > 100:
+            return entries
+
+        # Parse each entry
+        data_start = reading_list_offset + 4
+        for i in range(entry_count):
+            entry_offset = data_start + i * entry_size
+            if entry_offset + 4 > len(self.data):
+                break
+
+            # Read 2-byte measures (little-endian shorts)
+            from_measure = struct.unpack('<H', self.data[entry_offset:entry_offset + 2])[0]
+            to_measure = struct.unpack('<H', self.data[entry_offset + 2:entry_offset + 4])[0]
+
+            # Skip invalid entries
+            if from_measure == 0 and to_measure == 0:
+                continue
+
+            entries.append(TEFReadingListEntry(
+                index=i + 1,
+                from_measure=from_measure,
+                to_measure=to_measure,
+                offset=entry_offset,
+            ))
+
+        return entries
+
+    def find_component_offset(self) -> int:
+        """Find the component (note) region start using the 'debt' header marker.
+
+        The 'debt' marker at offset 56 is followed by a 4-byte pointer to the
+        component section. Components use TuxGuitar format:
+        - Bytes 0-3: location (encodes measure + position + cumulative string)
+        - Byte 4: component type (notes have fret in bits 0-4)
+        - Bytes 5-11: component-specific data
+
+        Returns the component region start offset, or -1 if not found.
         """
         debt_pos = self.data.find(b'debt')
         if debt_pos < 0:
             return -1
 
-        # Read the 4-byte value after 'debt'
+        # Read the 4-byte pointer value after 'debt' - this points directly to components
         debt_val = struct.unpack('<I', self.data[debt_pos + 4:debt_pos + 8])[0]
 
-        # Valid markers: I, F, L, C (C is used for chords/continue in some files)
-        valid_markers = (0x49, 0x46, 0x4c, 0x43)
+        if debt_val >= len(self.data) or debt_val < 100:
+            return -1
 
-        # Try different offsets from debt_val
-        for offset in [-6, 0, 6, 12]:
-            note_start = debt_val + offset
-            if note_start + 24 <= len(self.data) and note_start >= 0:
-                rec1 = self.data[note_start:note_start + 12]
-                rec2 = self.data[note_start + 12:note_start + 24]
-                # Check if either record has a valid marker at byte 11
-                if rec1[11] in valid_markers or rec2[11] in valid_markers:
-                    return note_start
+        return debt_val
 
-        return -1
+    def find_debt_offset(self) -> int:
+        """Legacy method - calls find_component_offset for compatibility."""
+        return self.find_component_offset()
 
     def find_note_region(self) -> tuple[int, str]:
         """Find the start offset of the note event region and format type.
@@ -472,102 +754,277 @@ class TEFReader:
         return (-1, '')
 
     def parse_note_events(self, start_offset: int = -1) -> list[TEFNoteEvent]:
-        """Parse note events from the file.
+        """Parse note events using TuxGuitar component format.
 
-        Note events are 12-byte records with unified format:
-        - Bytes 0-5: Extended position/flags (may be zeros for simple files)
-        - Byte 6: Position low byte (also contains string encoding in bits 3-5)
-        - Byte 7: Position high byte
-        - Bytes 8-9: Additional flags
-        - Byte 10: Fret + 1
-        - Byte 11: Marker ('I'=Initial, 'F'=Fret, 'L'=Legato)
+        Component records are 12 bytes:
+        - Bytes 0-3: Location (encodes measure, position, cumulative string)
+        - Byte 4: Component type (notes have fret in bits 0-4)
+        - Bytes 5-11: Component-specific parameters
 
-        String encoding: string = (byte6 & 0x38) >> 3 + 1  (values 0,8,16,24,32 map to strings 1-5)
+        For notes: fret = (componentType & 0x1f) - 1
+        String and track are calculated from location using cumulative string counts.
         """
         events = []
-        format_type = 'unified'
 
-        # Find note region if not specified
+        # Get component start offset
         if start_offset < 0:
-            start_offset, format_type = self.find_note_region()
+            start_offset = self.find_component_offset()
             if start_offset < 0:
-                return events  # No notes found
+                return events
+
+        # Calculate total strings across all instruments for location decoding
+        total_strings = sum(inst.num_strings for inst in self.parse_instruments())
+        if total_strings == 0:
+            total_strings = 5  # Default to single 5-string instrument
+
+        VALUE_PER_STRING = 8
+        VALUE_PER_POSITION = 32 * total_strings
+
+        # Get track string counts for track identification
+        instruments = self.parse_instruments()
+        track_string_counts = [inst.num_strings for inst in instruments]
+        if not track_string_counts:
+            track_string_counts = [5]  # Default banjo
+
+        # Non-note component types (from TuxGuitar TEInputStream.java)
+        NON_NOTE_TYPES = {0x33, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3D,
+                         0x75, 0x78, 0x7D, 0x7E, 0xB6, 0xB7, 0xBD, 0xBE, 0xFD, 0xFE}
 
         offset = start_offset
-        prev_pos = -1
         consecutive_invalid = 0
-        max_invalid = 10  # Stop after 10 consecutive invalid markers
+        max_invalid = 20
 
         while offset + 12 <= len(self.data):
             record = self.data[offset:offset + 12]
 
-            # Unified format: marker at byte 11
-            marker_byte = record[11]
+            # TuxGuitar format: bytes 0-3 = location, byte 4 = component type
+            location = struct.unpack('<I', record[0:4])[0]
+            component_type = record[4]
 
-            # Decode marker
+            # Skip known non-note component types
+            if component_type in NON_NOTE_TYPES:
+                offset += 12
+                continue
+
+            # Check if it's a note: bits 0-4 should be in range 1-25 (fret 0-24)
+            lower_bits = component_type & 0x1f
+            if lower_bits < 0x01 or lower_bits > 0x19:
+                # Not a valid note - might be end of components or unknown type
+                offset += 12
+                consecutive_invalid += 1
+                if consecutive_invalid >= max_invalid:
+                    break
+                continue
+
+            consecutive_invalid = 0
+
+            # Decode note properties
+            fret = lower_bits - 1
+
+            # Calculate cumulative string from location
+            cumulative_string = (location % VALUE_PER_POSITION) // VALUE_PER_STRING
+
+            # Find which track owns this string
+            track_idx = 0
+            local_string = cumulative_string
+            for idx, num_strings in enumerate(track_string_counts):
+                if local_string < num_strings:
+                    track_idx = idx
+                    break
+                local_string -= num_strings
+
+            # Calculate position (in 16th note grid)
+            position = location // VALUE_PER_POSITION
+
+            # Read actual marker from record[5] (I=Initial, F=Fret, L=Legato, etc.)
+            marker_byte = record[5]
             if marker_byte == 0x49:  # 'I'
                 marker = 'I'
             elif marker_byte == 0x46:  # 'F'
                 marker = 'F'
             elif marker_byte == 0x4c:  # 'L'
                 marker = 'L'
-            elif marker_byte == 0x43:  # 'C' - chord/continue marker
+            elif marker_byte == 0x43:  # 'C'
                 marker = 'C'
-            elif marker_byte == 0x40:  # '@' - special marker in some files
+            elif marker_byte == 0x40:  # '@'
                 marker = '@'
-            elif marker_byte == 0x00:
-                marker = 'S'  # Special/section marker (skip but continue)
-                offset += 12
-                consecutive_invalid += 1
-                if consecutive_invalid >= max_invalid:
-                    break
-                continue
+            elif marker_byte == 0x41:  # 'A'
+                marker = 'A'
             else:
-                # Unknown marker - skip and continue looking
-                offset += 12
-                consecutive_invalid += 1
-                if consecutive_invalid >= max_invalid:
-                    break
-                continue
+                marker = chr(marker_byte) if 32 <= marker_byte <= 126 else 'F'
 
-            # Reset invalid counter on valid marker
-            consecutive_invalid = 0
+            # Check for grace note flag in component type
+            is_grace_note = bool(component_type & 0x40)
 
-            # Position from bytes 6-7 only (bytes 0-5 contain flags/articulation, not position)
-            pos_low = struct.unpack("<H", record[6:8])[0]
-
-            # Clear the string encoding bits from position (bits 3-5 of low byte)
-            # Keep bits 0-2 and 6+ for position calculation
-            pos = (record[6] & 0xC7) | (record[7] << 8)
-
-            # Track/voice info from bytes 4-5
-            track = record[4] if record[4] != 0 else 1
-            extra = record[5]  # Articulation: 0=normal, 1=hammer-on, 2=pull-off, 3=slide
-
-            # For backward compatibility, keep pitch_byte (was b9 in old format)
-            pitch_byte = record[9]
-
-            # Stop if we see end marker pattern
-            if record[6:8] == b'\xff\xff' or record[10:12] == b'\xff\xff':
-                break
-
+            # Store track index, local string (1-indexed), and fret
+            # Use pitch_byte field to store track index for filtering
             events.append(TEFNoteEvent(
-                position=pos,
-                track=track,
+                position=position,
+                track=track_idx,
                 marker=marker,
-                extra=extra,
-                pitch_byte=pitch_byte,
+                extra=local_string + 1,  # Store 1-indexed local string
+                pitch_byte=fret,          # Store fret directly
                 raw_data=record,
             ))
 
-            prev_pos = pos
             offset += 12
 
         return events
 
+    def parse_note_events_v2(self, header: TEFHeader) -> list[TEFNoteEvent]:
+        """Parse note events from V2 format (6-byte records).
+
+        V2 record format (per TuxGuitar TEInputStream.java):
+        - Bytes 0-1: location (combined position/string/measure encoding)
+        - Byte 2: type+fret (bits 0-4 = fret+1, where 0x01-0x19 are notes)
+        - Byte 3: duration (bits 0-4) + dynamic (bits 5-7)
+        - Byte 4: effect1
+        - Byte 5: effect2
+
+        Location decoding:
+        - tsSize = (256 * numerator) / denominator
+        - position = location % tsSize
+        - string = (location / tsSize) % numStrings
+        - measure = location / (tsSize * numStrings)
+        """
+        events = []
+
+        # Use header values for decoding
+        ts_size = header.v2_ts_size
+        num_strings = header.v2_strings
+        component_offset = header.v2_component_offset
+        component_count = header.v2_component_count
+
+        if ts_size == 0 or num_strings == 0:
+            return events
+
+        # Get track string counts to map cumulative string to track
+        instruments = self.parse_instruments_v2(header)
+        track_string_counts = [inst.num_strings for inst in instruments]
+        if not track_string_counts:
+            track_string_counts = [num_strings]  # Single track fallback
+
+        # TuxGuitar uses mData to handle measure overflow (when location wraps)
+        m_data = 0
+        m_index = 0
+
+        offset = component_offset
+        for _ in range(component_count):
+            if offset + 6 > len(self.data):
+                break
+
+            rec = self.data[offset:offset + 6]
+
+            # Decode location with overflow handling (per TuxGuitar)
+            location = (rec[0] & 0xff) + (256 * (m_data + (rec[1] & 0xff)))
+
+            # Check for measure overflow
+            if (location // (ts_size * num_strings)) < m_index:
+                m_data += 256
+                location = (rec[0] & 0xff) + (256 * (m_data + (rec[1] & 0xff)))
+
+            # Decode position/string/measure
+            position_in_measure = location % ts_size
+            cumulative_string = (location // ts_size) % num_strings
+            measure = location // (ts_size * num_strings)
+
+            m_index = measure  # Track current measure for overflow detection
+
+            fret_byte = rec[2]
+            fret_raw = fret_byte & 0x1f
+
+            # Check for note vs special component
+            if fret_raw >= 0x01 and fret_raw <= 0x19:
+                # This is a note
+                fret = fret_raw - 1
+
+                # Handle high frets (bit 5 set means add effect2 to fret)
+                if (fret_byte >> 5) & 0x01:
+                    fret += rec[5] & 0xff
+
+                # Map cumulative string to track and local string
+                track_idx = 0
+                local_string = cumulative_string
+                for idx, num_track_strings in enumerate(track_string_counts):
+                    if local_string < num_track_strings:
+                        track_idx = idx
+                        break
+                    local_string -= num_track_strings
+
+                # Convert to 16th-note position for consistency with v3 format
+                # (MIDI exporter expects positions in 16th note units)
+                POSITIONS_PER_MEASURE = 16  # 16th notes in 4/4
+                abs_position = measure * POSITIONS_PER_MEASURE + (position_in_measure * POSITIONS_PER_MEASURE // ts_size)
+
+                # Create note event
+                events.append(TEFNoteEvent(
+                    position=abs_position,
+                    track=track_idx,
+                    marker='F',
+                    extra=local_string + 1,  # 1-indexed local string within track
+                    pitch_byte=fret,
+                    raw_data=rec,
+                ))
+
+            offset += 6
+
+        return events
+
+    def parse_instruments_v2(self, header: TEFHeader) -> list[TEFInstrument]:
+        """Parse instruments from V2 format.
+
+        V2 stores instrument info at the end of the file, similar to v3.
+        """
+        # Use same logic as v3 - instrument names appear in the file
+        # Just call the existing parser
+        return self.parse_instruments()
+
     def parse(self) -> TEFFile:
-        """Parse the entire TEF file."""
+        """Parse the entire TEF file.
+
+        Supports both V2 and V3 formats:
+        - V2: Older format with 6-byte note records
+        - V3: Current format with 12-byte note records
+        """
         header = self.read_header()
+
+        # Dispatch based on version
+        if header.is_v2:
+            return self._parse_v2(header)
+        else:
+            return self._parse_v3(header)
+
+    def _parse_v2(self, header: TEFHeader) -> TEFFile:
+        """Parse V2 format TEF file."""
+        # Title comes from header for v2
+        title = header.v2_title
+
+        # Parse instruments (same format as v3, at end of file)
+        instruments = self.parse_instruments_v2(header)
+
+        # Parse notes using v2 format
+        note_events = self.parse_note_events_v2(header)
+
+        # V2 doesn't have reading list, chords stored differently
+        reading_list = []
+        chords = []
+        sections = []
+        strings = []
+
+        return TEFFile(
+            path=self.path,
+            header=header,
+            title=title,
+            strings=strings,
+            instruments=instruments,
+            chords=chords,
+            sections=sections,
+            note_events=note_events,
+            reading_list=reading_list,
+        )
+
+    def _parse_v3(self, header: TEFHeader) -> TEFFile:
+        """Parse V3 format TEF file."""
         strings = self.find_strings()
 
         # Find title (usually the longest string early in the file)
@@ -582,6 +1039,7 @@ class TEFReader:
         chords = self.parse_chords()
         sections = self.parse_sections()
         note_events = self.parse_note_events()
+        reading_list = self.parse_reading_list()
 
         return TEFFile(
             path=self.path,
@@ -592,4 +1050,5 @@ class TEFReader:
             chords=chords,
             sections=sections,
             note_events=note_events,
+            reading_list=reading_list,
         )

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# Test runner for 03_angeline_banjo_only
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+cd "$REPO_ROOT"
+
+echo "=== Test 03: Angeline Banjo Only ==="
+echo
+
+# Check if truth files exist
+if [ ! -f "$SCRIPT_DIR/truth/input.tef" ] || [ ! -f "$SCRIPT_DIR/truth/expected.mid" ]; then
+    echo "PENDING - Truth files not yet created"
+    echo
+    echo "To create this test:"
+    echo "  1. Open samples/songs/angeline_the_baker_*.tef in TablEdit"
+    echo "  2. Delete the guitar track"
+    echo "  3. Save as tests/03_angeline_banjo_only/truth/input.tef"
+    echo "  4. Export MIDI as tests/03_angeline_banjo_only/truth/expected.mid"
+    exit 0
+fi
+
+# Run parser
+uv run python3 scripts/lib/export_midi.py \
+    "$SCRIPT_DIR/truth/input.tef" \
+    "$SCRIPT_DIR/parsed/output.mid"
+
+echo
+
+# Compare results
+uv run python3 -c "
+from mido import MidiFile
+
+expected = MidiFile('$SCRIPT_DIR/truth/expected.mid')
+actual = MidiFile('$SCRIPT_DIR/parsed/output.mid')
+
+# Find the banjo track (might be track 1 or only track)
+exp_notes = []
+for i, track in enumerate(expected.tracks):
+    notes = [msg.note for msg in track if msg.type == 'note_on' and msg.velocity > 0]
+    if notes:
+        exp_notes = notes
+        break
+
+act_notes = [msg.note for track in actual.tracks for msg in track if msg.type == 'note_on' and msg.velocity > 0]
+
+matches = sum(1 for a, b in zip(exp_notes, act_notes) if a == b)
+total = min(len(exp_notes), len(act_notes))
+
+print(f'Expected: {len(exp_notes)} notes')
+print(f'Actual:   {len(act_notes)} notes')
+print(f'Matches:  {matches}/{total} ({100*matches/total:.0f}%)')
+print()
+
+if len(exp_notes) == len(act_notes) == matches:
+    print('PASS')
+    exit(0)
+else:
+    print('FAIL')
+    for i, (e, a) in enumerate(zip(exp_notes, act_notes)):
+        if e != a:
+            print(f'First mismatch at [{i}]: expected {e}, got {a}')
+            break
+    exit(1)
+"

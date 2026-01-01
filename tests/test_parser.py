@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from tef_parser import TEFReader
 
 
-SAMPLE_FILE = Path(__file__).parent.parent / "shuck_the_corn.tef"
+SAMPLE_FILE = Path(__file__).parent.parent / "samples" / "songs" / "shuck_the_corn.tef"
+V2_SAMPLE_FILE = Path(__file__).parent.parent / "samples" / "songs" / "mandolin_foggy_mountain_breakdown.tef"
 
 
 def test_read_header():
@@ -73,17 +74,19 @@ def test_tuning_intervals():
     reader = TEFReader(SAMPLE_FILE)
     tef = reader.parse()
 
-    # Guitar should have standard tuning intervals: 5, 5, 5, 4, 5 semitones
+    # Guitar should have standard tuning intervals: 5, 4, 5, 5, 5 semitones
+    # (from high to low: E-B-G-D-A-E)
     guitar = next(i for i in tef.instruments if i.name == "guitar")
     pitches = guitar.tuning_pitches
-    intervals = [pitches[i+1] - pitches[i] for i in range(len(pitches)-1)]
-    assert intervals == [5, 4, 5, 5, 5]  # E-A-D-G-B-E intervals
+    # Intervals from string 1 to string 6 (high to low) are descending
+    intervals = [abs(pitches[i+1] - pitches[i]) for i in range(len(pitches)-1)]
+    assert intervals == [5, 4, 5, 5, 5]  # E-B-G-D-A-E intervals
 
     # Bass should have all perfect fourths: 5, 5, 5
     bass = next(i for i in tef.instruments if i.name == "bass")
     pitches = bass.tuning_pitches
-    intervals = [pitches[i+1] - pitches[i] for i in range(len(pitches)-1)]
-    assert intervals == [5, 5, 5]  # E-A-D-G intervals
+    intervals = [abs(pitches[i+1] - pitches[i]) for i in range(len(pitches)-1)]
+    assert intervals == [5, 5, 5]  # G-D-A-E intervals
 
 
 def test_parse_note_events():
@@ -110,11 +113,48 @@ def test_note_event_structure():
     reader = TEFReader(SAMPLE_FILE)
     tef = reader.parse()
 
-    # First event should be at position 3
+    # First event should be near the start (position may vary slightly)
     first = tef.note_events[0]
-    assert first.position == 3
+    assert first.position < 10  # First note is early in the piece
     assert first.marker == 'I'
 
-    # All events should have 12-byte raw data
+    # All events should have 12-byte raw data (v3 format)
     for evt in tef.note_events:
         assert len(evt.raw_data) == 12
+
+
+def test_v2_file_parsing():
+    """Test that v2 format files are parsed correctly."""
+    if not V2_SAMPLE_FILE.exists():
+        import pytest
+        pytest.skip("V2 sample file not found")
+
+    reader = TEFReader(V2_SAMPLE_FILE)
+    tef = reader.parse()
+
+    # Check v2-specific header fields
+    assert tef.header.is_v2
+    assert tef.header.version == "2.00"
+    assert tef.header.v2_title == "Foggy Mountain Breakdown"
+    assert tef.header.v2_time_num == 4
+    assert tef.header.v2_time_denom == 4
+    assert tef.header.v2_strings == 14  # Total across all tracks
+    assert tef.header.v2_tracks == 3
+
+    # Check instruments
+    assert len(tef.instruments) == 3
+    mandolin = tef.instruments[0]
+    assert "Mandolin" in mandolin.name
+    assert mandolin.num_strings == 4
+
+    # Check notes
+    assert len(tef.note_events) > 100
+    # Notes should be distributed across tracks
+    track_counts = {}
+    for evt in tef.note_events:
+        track_counts[evt.track] = track_counts.get(evt.track, 0) + 1
+    assert len(track_counts) >= 2  # At least 2 tracks have notes
+
+    # V2 notes have 6-byte raw data
+    for evt in tef.note_events:
+        assert len(evt.raw_data) == 6

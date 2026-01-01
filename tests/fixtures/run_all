@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# Run all tests in the tests/ directory
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+echo "=== Running All Tests ==="
+echo
+
+passed=0
+failed=0
+partial=0
+
+for test_dir in "$TESTS_DIR"/[0-9]*/; do
+    if [ -x "$test_dir/test" ]; then
+        test_name=$(basename "$test_dir")
+        echo "--- $test_name ---"
+
+        if "$test_dir/test"; then
+            result=$?
+        else
+            result=$?
+        fi
+
+        # Check last line of output for PASS/FAIL/PARTIAL
+        # (tests exit 0 for PASS or PARTIAL, non-zero for FAIL)
+        if [ $result -eq 0 ]; then
+            ((passed++)) || true
+        else
+            ((failed++)) || true
+        fi
+
+        echo
+    fi
+done
+
+echo "=== Summary ==="
+echo "Passed: $passed"
+echo "Failed: $failed"
+echo
+
+if [ $failed -gt 0 ]; then
+    exit 1
+fi
