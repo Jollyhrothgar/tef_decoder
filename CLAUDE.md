@@ -23,11 +23,13 @@ TablEdit_Reverse/
 ├── src/tef_parser/           # Core parser
 │   ├── __init__.py
 │   ├── reader.py             # TEFReader class (v2 + v3 support)
-│   └── cli.py                # CLI entry point
+│   ├── cli.py                # CLI entry point
+│   └── otf.py                # OTF format exporter
 ├── tests/
 │   ├── test_parser.py        # Unit tests
 │   └── 01-03_*/              # Integration test fixtures
-└── docs/                     # Extracted PDF documentation
+└── docs/
+    └── OPEN_TAB_FORMAT.md    # OTF specification
 ```
 
 ## Format Support
@@ -44,6 +46,12 @@ The parser auto-detects version and uses the appropriate decoder.
 ```bash
 # Parse and show file structure
 tef parse samples/songs/shuck_the_corn.tef
+
+# Export to OTF (Open Tab Format) - YAML
+tef otf samples/songs/shuck_the_corn.tef output.otf.yaml
+
+# Export to OTF - JSON
+tef otf samples/songs/shuck_the_corn.tef --json output.otf.json
 
 # Export to MIDI (single track)
 tef midi samples/songs/shuck_the_corn.tef output.mid
@@ -62,6 +70,18 @@ tef view input.tef
 ```
 
 For development without global install: `uv run tef <command>`
+
+## OTF (Open Tab Format)
+
+See `docs/OPEN_TAB_FORMAT.md` for full specification.
+
+Key features:
+- **Human-diffable**: YAML or JSON, clean structure
+- **Multi-track**: Full arrangements with lead and rhythm roles
+- **Tick-based timing**: 480 ticks/beat for precise subdivisions
+- **Technique codes**: `h` (hammer-on), `p` (pull-off), `/` (slide), etc.
+- **Reading list**: Preserves repeat structure for playback
+- **Extensible**: x-prefixed namespaces for custom extensions
 
 ## TEF Format Summary
 
