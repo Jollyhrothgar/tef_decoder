@@ -571,13 +571,28 @@
                         const firstX = beatNotes[0].x - halfStem;
                         const lastX = beatNotes[beatNotes.length - 1].x + halfStem;
 
-                        // Draw primary beam (spans all notes)
+                        // Draw primary beam (spans all notes) with closed ends
                         const beam = this.createRect(
                             firstX, beamY - opt.beamThickness,
                             Math.max(lastX - firstX, 1), opt.beamThickness,
                             opt.beamColor
                         );
                         svg.appendChild(beam);
+
+                        // Add caps at both ends of primary beam
+                        const leftPrimaryCap = this.createRect(
+                            firstX, beamY - opt.beamThickness,
+                            opt.stemWidth, opt.beamThickness,
+                            opt.beamColor
+                        );
+                        svg.appendChild(leftPrimaryCap);
+
+                        const rightPrimaryCap = this.createRect(
+                            lastX - opt.stemWidth, beamY - opt.beamThickness,
+                            opt.stemWidth, opt.beamThickness,
+                            opt.beamColor
+                        );
+                        svg.appendChild(rightPrimaryCap);
 
                         // Draw secondary beams only between consecutive 16th notes
                         // A note is a 16th if: (1) it's at an odd position, OR
@@ -611,6 +626,37 @@
                                         opt.beamColor
                                     );
                                     svg.appendChild(secondBeam);
+
+                                    // Draw closing caps where secondary beam ends but primary continues
+                                    // Check if there's NO 16th pair to the left of curr
+                                    const prevNote = beatNotes[i - 1];
+                                    const needsLeftCap = !prevNote || (curr.pos16th - prevNote.pos16th !== 1) ||
+                                        !is16thNote(prevNote, curr) || !currIs16th;
+
+                                    if (needsLeftCap) {
+                                        // Draw left cap (vertical line from secondary to primary beam)
+                                        const leftCap = this.createRect(
+                                            curr.x - halfStem, secondBeamY - opt.beamThickness,
+                                            opt.stemWidth, beamY - secondBeamY + opt.beamThickness,
+                                            opt.beamColor
+                                        );
+                                        svg.appendChild(leftCap);
+                                    }
+
+                                    // Check if there's NO 16th pair to the right of next
+                                    const afterAfterNext = beatNotes[i + 3];
+                                    const needsRightCap = !afterNext || (afterNext.pos16th - next.pos16th !== 1) ||
+                                        !nextIs16th || !is16thNote(afterNext, afterAfterNext);
+
+                                    if (needsRightCap) {
+                                        // Draw right cap (vertical line from secondary to primary beam)
+                                        const rightCap = this.createRect(
+                                            next.x - halfStem, secondBeamY - opt.beamThickness,
+                                            opt.stemWidth, beamY - secondBeamY + opt.beamThickness,
+                                            opt.beamColor
+                                        );
+                                        svg.appendChild(rightCap);
+                                    }
                                 }
                             }
                         }
