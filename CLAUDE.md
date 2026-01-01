@@ -1,6 +1,30 @@
-# TablEdit Reverse Engineering Project
+# Bluegrass Tablature Tools
 
-Reverse engineering the TablEdit `.tef` file format to preserve tablature arrangements before the software becomes unsupported.
+An open ecosystem for bluegrass/acoustic tablature: preservation, playback, and authoring.
+
+## Project Evolution
+
+**Phase 1: Preservation (working)**
+- Reverse-engineered TablEdit `.tef` format (v2 and v3)
+- Parser extracts notes, timing, techniques, multi-track arrangements
+- TODO: more technique types, grace notes, chord diagrams
+
+**Phase 2: Interchange Format (working)**
+- OTF (Open Tab Format) - machine-readable JSON/YAML
+- Precise timing, techniques, reading lists, multi-track support
+- TODO: lyrics, chord symbols, ornaments, dynamics
+
+**Phase 3: Viewer & Playback (working)**
+- Web-based SVG tablature renderer with basic beaming
+- WebAudioFont integration for instrument sounds
+- Multi-track playback with mixer controls
+- TODO: print/PDF, transposition, chord diagrams, lyrics display,
+  mobile layout, keyboard nav, standard notation option
+
+**Phase 4: Authoring (draft)**
+- HTF (Human Tab Format) - text-based authoring format
+- Compiles to OTF for rendering/playback
+- See `docs/HUMAN_TAB_FORMAT.md` for draft spec
 
 ## Quick Start
 
@@ -25,11 +49,14 @@ TablEdit_Reverse/
 │   ├── reader.py             # TEFReader class (v2 + v3 support)
 │   ├── cli.py                # CLI entry point
 │   └── otf.py                # OTF format exporter
+├── viewer/                   # Web-based viewer/player
+│   └── index.html            # SVG tab renderer + WebAudioFont playback
 ├── tests/
 │   ├── test_parser.py        # Unit tests
 │   └── 01-03_*/              # Integration test fixtures
 └── docs/
-    └── OPEN_TAB_FORMAT.md    # OTF specification
+    ├── OPEN_TAB_FORMAT.md    # OTF specification (machine format)
+    └── HUMAN_TAB_FORMAT.md   # HTF draft spec (authoring format)
 ```
 
 ## Format Support
@@ -71,6 +98,35 @@ tef view input.tef
 
 For development without global install: `uv run tef <command>`
 
+## Format Stack
+
+```
+WYSIWYG Editor / Power User
+         ↓ saves
+HTF (Human Tab Format)     <- Source of truth (text-based, diffable)
+         ↓ parses to
+[Internal Structure]       <- What OTF spec documents
+         ↓ renders to
+SVG + Audio                <- Viewer with WebAudioFont playback
+```
+
+**HTF** = primary file format (authoring, saving, version control)
+**OTF** = internal data model + archival format for variation tracking
+
+**TEF → HTF**: Preservation path (import legacy arrangements)
+**Editor → HTF**: Authoring path (WYSIWYG saves to HTF)
+
+## Viewer
+
+Open `viewer/index.html` in a browser, load an `.otf.json` or `.otf.yaml` file.
+
+Features:
+- SVG tablature rendering with proper beaming
+- WebAudioFont playback (banjo, guitar, mandolin, bass, fiddle, dobro)
+- Multi-track "Play All" with mixer controls (volume, sustain, decay)
+- Loop mode for practice
+- Tempo adjustment
+
 ## OTF (Open Tab Format)
 
 See `docs/OPEN_TAB_FORMAT.md` for full specification.
@@ -82,6 +138,25 @@ Key features:
 - **Technique codes**: `h` (hammer-on), `p` (pull-off), `/` (slide), etc.
 - **Reading list**: Preserves repeat structure for playback
 - **Extensible**: x-prefixed namespaces for custom extensions
+
+## HTF (Human Tab Format)
+
+See `docs/HUMAN_TAB_FORMAT.md` for draft specification.
+
+Design goals:
+- Readable without tooling
+- Fast to type (minimal syntax)
+- Compiles to OTF for rendering/playback
+
+Example:
+```
+# Cripple Creek
+banjo openG | tempo 160 | 2/2 | L:1/8
+
+A: |: 3.0 2.0 1.0+5.0 2.0 | 3.0 3h2 2.0 1.0 :|
+
+play: AA
+```
 
 ## TEF Format Summary
 
